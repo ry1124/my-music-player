@@ -74,6 +74,11 @@ function bindUIEvents() {
 
   document.getElementById('btn-auto-lyrics').addEventListener('click', autoFetchLyrics);
   document.getElementById('btn-rescan-tags').addEventListener('click', rescanYearGenreTags);
+  document.getElementById('btn-year-sort').addEventListener('click', () => {
+    yearSortOrder = yearSortOrder === 'desc' ? 'asc' : 'desc';
+    document.getElementById('btn-year-sort').textContent = yearSortOrder === 'desc' ? '新→古' : '古→新';
+    renderYearList();
+  });
   document.getElementById('btn-back-group').addEventListener('click', () => {
     showView(lastGroupListView);
   });
@@ -424,18 +429,34 @@ async function rescanYearGenreTags() {
 }
 
 // ===== 年代別・ジャンル別グルーピング =====
-function decadeLabel(track) {
+let yearSortOrder = 'desc'; // 'desc'=新しい順(デフォルト) / 'asc'=古い順
+
+function yearLabel(track) {
   if (!track.year) return '不明';
   const y = parseInt(track.year, 10);
   if (isNaN(y)) return '不明';
-  return `${Math.floor(y / 10) * 10}年代`;
+  return `${y}年`;
+}
+
+function yearSortFn(a, b) {
+  if (a === '不明') return 1;
+  if (b === '不明') return -1;
+  const ya = parseInt(a, 10);
+  const yb = parseInt(b, 10);
+  return yearSortOrder === 'desc' ? yb - ya : ya - yb;
 }
 
 function genreLabel(track) {
   return track.genre && track.genre.trim() ? track.genre.trim() : '不明';
 }
 
-function renderGroupList(listElId, groupFn) {
+function defaultLabelSort(a, b) {
+  if (a === '不明') return 1;
+  if (b === '不明') return -1;
+  return a.localeCompare(b, 'ja');
+}
+
+function renderGroupList(listElId, groupFn, sortFn) {
   const listEl = document.getElementById(listElId);
   listEl.innerHTML = '';
   const groups = new Map(); // label -> track[]
@@ -444,11 +465,7 @@ function renderGroupList(listElId, groupFn) {
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label).push(t);
   });
-  const sortedLabels = [...groups.keys()].sort((a, b) => {
-    if (a === '不明') return 1;
-    if (b === '不明') return -1;
-    return a.localeCompare(b, 'ja');
-  });
+  const sortedLabels = [...groups.keys()].sort(sortFn || defaultLabelSort);
   sortedLabels.forEach((label) => {
     const groupTracks = groups.get(label);
     const li = document.createElement('li');
@@ -473,7 +490,7 @@ function renderGroupList(listElId, groupFn) {
   });
 }
 
-function renderYearList() { renderGroupList('year-list', decadeLabel); }
+function renderYearList() { renderGroupList('year-list', yearLabel, yearSortFn); }
 function renderGenreList() { renderGroupList('genre-list', genreLabel); }
 
 function openGroupDetail(label, groupTracks, backView) {
