@@ -91,8 +91,32 @@ function bindUIEvents() {
 }
 
 // ===== ファイル取り込み(ID3解析) =====
+const IMPORT_CONCURRENCY = 4; // 同時並列処理数(多すぎるとiOS Safariでメモリ逼迫のおそれ)
+
 function makeSourceKey(file) {
   return `${file.name}_${file.size}_${file.lastModified}`;
+}
+
+async function importOneFile(file, sourceKey, orderHint) {
+  const tags = await readTags(file);
+  const duration = await getAudioDuration(file);
+  const artworkBlob = pictureToBlob(tags.picture);
+  const lyrics = extractLyrics(tags);
+  const track = {
+    title: (tags.title && tags.title.trim()) || file.name.replace(/\.[^/.]+$/, ''),
+    artist: (tags.artist && tags.artist.trim()) || '不明なアーティスト',
+    album: (tags.album && tags.album.trim()) || '',
+    duration,
+    fileBlob: file,
+    mimeType: file.type || 'audio/mpeg',
+    artworkBlob,
+    lyrics,
+    sourceKey,
+    addedAt: Date.now() + orderHint,
+  };
+  const id = await DB.addTrack(track);
+  track.id = id;
+  return track;
 }
 
 async function handleFilesSelected(fileList) {
@@ -102,49 +126,61 @@ async function handleFilesSelected(fileList) {
   progressEl.classList.remove('hidden');
 
   const existingKeys = new Set(tracks.map(t => t.sourceKey).filter(Boolean));
-  let addedCount = 0;
+  const targets = [];
   let skippedCount = 0;
-
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
+  for (const file of files) {
     const sourceKey = makeSourceKey(file);
     if (existingKeys.has(sourceKey)) {
       skippedCount++;
-      progressEl.textContent = `取り込み中... (${i + 1}/${files.length}) 追加済みのためスキップ: ${file.name}`;
-      continue;
-    }
-    progressEl.textContent = `取り込み中... (${i + 1}/${files.length}) ${file.name}`;
-    try {
-      const tags = await readTags(file);
-      const duration = await getAudioDuration(file);
-      const artworkBlob = pictureToBlob(tags.picture);
-      const lyrics = extractLyrics(tags);
-      const track = {
-        title: (tags.title && tags.title.trim()) || file.name.replace(/\.[^/.]+$/, ''),
-        artist: (tags.artist && tags.artist.trim()) || '不明なアーティスト',
-        album: (tags.album && tags.album.trim()) || '',
-        duration,
-        fileBlob: file,
-        mimeType: file.type || 'audio/mpeg',
-        artworkBlob,
-        lyrics,
-        sourceKey,
-        addedAt: Date.now() + i,
-      };
-      const id = await DB.addTrack(track);
-      track.id = id;
-      tracks.push(track);
-      existingKeys.add(sourceKey);
-      addedCount++;
-    } catch (err) {
-      console.error('取り込み失敗:', file.name, err);
+    } else {
+      existingKeys.add(sourceKey); // 同一選択内の重複も先に弾く
+      targets.push({ file, sourceKey });
     }
   }
+
+  let addedCount = 0;
+  let processedCount = 0;
+  const startTime = Date.now();
+
+  const updateProgress = (fileName) => {
+    processedCount++;
+    const elapsedSec = (Date.now() - startTime) / 1000;
+    const rate = processedCount / elapsedSec;
+    const remaining = targets.length - processedCount;
+    const etaMin = rate > 0 ? Math.ceil(remaining / rate / 60) : 0;
+    const etaText = etaMin > 0 ? `(残り約${etaMin}分)` : '';
+    progressEl.textContent =
+      `取り込み中... ${processedCount}/${targets.length}曲 ${etaText} ` +
+      (skippedCount > 0 ? `[既存${skippedCount}曲はスキップ済み] ` : '') +
+      fileName;
+  };
+
+  for (let i = 0; i < targets.length; i += IMPORT_CONCURRENCY) {
+    const chunk = targets.slice(i, i + IMPORT_CONCURRENCY);
+    const results = await Promise.all(chunk.map(async ({ file, sourceKey }, idx) => {
+      try {
+        const track = await importOneFile(file, sourceKey, i + idx);
+        return track;
+      } catch (err) {
+        console.error('取り込み失敗:', file.name, err);
+        return null;
+      } finally {
+        updateProgress(file.name);
+      }
+    }));
+    results.forEach((track) => {
+      if (track) {
+        tracks.push(track);
+        addedCount++;
+      }
+    });
+  }
+
   progressEl.classList.add('hidden');
   renderTrackList(document.getElementById('search-input').value.trim());
-  if (skippedCount > 0) {
-    alert(`取り込み完了: 新規${addedCount}曲を追加、${skippedCount}曲は追加済みのためスキップしました`);
-  }
+  const totalSec = Math.round((Date.now() - startTime) / 1000);
+  const timeText = totalSec >= 60 ? `${Math.floor(totalSec / 60)}分${totalSec % 60}秒` : `${totalSec}秒`;
+  alert(`取り込み完了: 新規${addedCount}曲を追加、${skippedCount}曲は追加済みのためスキップ(所要${timeText})`);
 }
 
 function readTags(file) {
