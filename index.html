@@ -21,12 +21,16 @@
   <section id="view-library" class="view active">
     <header class="topbar">
       <h1>ライブラリ</h1>
-      <button id="btn-add" class="icon-btn" title="曲を追加">＋</button>
+      <div class="topbar-actions">
+        <button id="btn-import-lyrics" class="icon-btn" title="歌詞ファイルを一括読み込み">📝</button>
+        <button id="btn-add" class="icon-btn" title="曲を追加">＋</button>
+      </div>
     </header>
     <div class="search-bar">
       <input id="search-input" type="search" placeholder="曲・アーティストを検索">
     </div>
     <input id="file-input" type="file" accept="audio/*" multiple hidden>
+    <input id="lyrics-file-input" type="file" accept=".lrc,.txt,text/plain" multiple hidden>
     <div id="import-progress" class="import-progress hidden"></div>
     <ul id="track-list" class="track-list"></ul>
     <p id="empty-hint" class="empty-hint hidden">＋ボタンからiPhone内の音楽ファイルを追加してください</p>

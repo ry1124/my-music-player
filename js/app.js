@@ -55,6 +55,14 @@ function bindUIEvents() {
     e.target.value = '';
   });
 
+  document.getElementById('btn-import-lyrics').addEventListener('click', () => {
+    document.getElementById('lyrics-file-input').click();
+  });
+  document.getElementById('lyrics-file-input').addEventListener('change', (e) => {
+    handleLyricsFilesSelected(e.target.files);
+    e.target.value = '';
+  });
+
   document.getElementById('search-input').addEventListener('input', (e) => {
     renderTrackList(e.target.value.trim());
   });
@@ -199,6 +207,57 @@ function pictureToBlob(picture) {
   return new Blob([byteArray], { type: picture.format || 'image/jpeg' });
 }
 
+// ===== 外部歌詞ファイル(.lrc/.txt)の読み込み =====
+function stripLrcTimestamps(text) {
+  return text
+    .split(/\r?\n/)
+    .map(line => line.replace(/\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]/g, '').trim())
+    .filter(line => line.length > 0 && !/^\[[a-zA-Z]+:.*\]$/.test(line))
+    .join('\n');
+}
+
+function importLyricsForTrack(track) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.lrc,.txt,text/plain';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const text = await file.text();
+    track.lyrics = stripLrcTimestamps(text);
+    await DB.updateTrack(track);
+    alert(`「${track.title}」に歌詞を読み込みました`);
+    if (currentTrack && currentTrack.id === track.id) updateLyricsPane();
+  };
+  input.click();
+}
+
+async function handleLyricsFilesSelected(fileList) {
+  const files = Array.from(fileList);
+  if (files.length === 0) return;
+  let matched = 0;
+  const unmatchedNames = [];
+  for (const file of files) {
+    const baseName = file.name.replace(/\.[^/.]+$/, '').trim();
+    const track = tracks.find(t => t.title.trim() === baseName);
+    if (!track) { unmatchedNames.push(file.name); continue; }
+    try {
+      const text = await file.text();
+      track.lyrics = stripLrcTimestamps(text);
+      await DB.updateTrack(track);
+      matched++;
+    } catch (err) {
+      console.error('歌詞読み込み失敗:', file.name, err);
+      unmatchedNames.push(file.name);
+    }
+  }
+  if (currentTrack) updateLyricsPane();
+  const unmatchedText = unmatchedNames.length > 0
+    ? `\n\n曲名が一致せず未適用(${unmatchedNames.length}件):\n` + unmatchedNames.slice(0, 10).join('\n') + (unmatchedNames.length > 10 ? '\n...' : '')
+    : '';
+  alert(`歌詞インポート完了: ${matched}曲に適用しました${unmatchedText}`);
+}
+
 function extractLyrics(tags) {
   if (!tags) return '';
   if (tags.lyrics) {
@@ -283,7 +342,7 @@ function buildTrackItem(track, queueIds) {
 
 // ===== アクションシート(簡易メニュー) =====
 function openTrackActionSheet(track) {
-  const options = ['プレイリストに追加'];
+  const options = ['プレイリストに追加', '歌詞ファイルを読み込む'];
   if (currentPlaylistId !== null) options.push('このプレイリストから削除');
   options.push('ライブラリから削除', 'キャンセル');
   const choice = prompt(
@@ -294,6 +353,7 @@ function openTrackActionSheet(track) {
   if (isNaN(idx) || idx < 0 || idx >= options.length) return;
   const label = options[idx];
   if (label === 'プレイリストに追加') addTrackToPlaylistPrompt(track.id);
+  else if (label === '歌詞ファイルを読み込む') importLyricsForTrack(track);
   else if (label === 'このプレイリストから削除') removeTrackFromCurrentPlaylist(track.id);
   else if (label === 'ライブラリから削除') deleteTrackFromLibrary(track.id);
 }
