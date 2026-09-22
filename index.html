@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Myミュージック">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>Myミュージック</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ===== ライブラリ画面 ===== -->
+  <section id="view-library" class="view active">
+    <header class="topbar">
+      <h1>ライブラリ</h1>
+      <button id="btn-add" class="icon-btn" title="曲を追加">＋</button>
+    </header>
+    <div class="search-bar">
+      <input id="search-input" type="search" placeholder="曲・アーティストを検索">
+    </div>
+    <input id="file-input" type="file" accept="audio/*" multiple hidden>
+    <div id="import-progress" class="import-progress hidden"></div>
+    <ul id="track-list" class="track-list"></ul>
+    <p id="empty-hint" class="empty-hint hidden">＋ボタンからiPhone内の音楽ファイルを追加してください</p>
+  </section>
+
+  <!-- ===== プレイリスト画面 ===== -->
+  <section id="view-playlists" class="view">
+    <header class="topbar">
+      <h1>プレイリスト</h1>
+      <button id="btn-new-playlist" class="icon-btn" title="新規プレイリスト">＋</button>
+    </header>
+    <ul id="playlist-list" class="playlist-list"></ul>
+  </section>
+
+  <!-- ===== プレイリスト詳細画面 ===== -->
+  <section id="view-playlist-detail" class="view">
+    <header class="topbar">
+      <button id="btn-back-playlists" class="icon-btn">‹ 戻る</button>
+      <h1 id="playlist-detail-title">プレイリスト</h1>
+      <button id="btn-delete-playlist" class="icon-btn" title="削除">🗑</button>
+    </header>
+    <ul id="playlist-detail-list" class="track-list"></ul>
+  </section>
+
+  <!-- ===== 再生中(Now Playing)画面 ===== -->
+  <section id="view-nowplaying" class="view">
+    <header class="topbar nowplaying-topbar">
+      <button id="btn-collapse-nowplaying" class="icon-btn">︿</button>
+      <span class="np-from" id="np-from">再生中</span>
+      <button id="btn-lyrics-toggle" class="icon-btn" title="歌詞">Aa</button>
+    </header>
+    <div class="np-artwork-wrap">
+      <img id="np-artwork" class="np-artwork" src="" alt="">
+      <div id="np-lyrics" class="np-lyrics hidden"></div>
+    </div>
+    <div class="np-meta">
+      <div id="np-title" class="np-title">曲名</div>
+      <div id="np-artist" class="np-artist">アーティスト</div>
+    </div>
+    <div class="np-seek">
+      <input id="seek-bar" type="range" min="0" max="1000" value="0">
+      <div class="np-time">
+        <span id="np-current-time">0:00</span>
+        <span id="np-duration">0:00</span>
+      </div>
+    </div>
+    <div class="np-controls">
+      <button id="btn-shuffle" class="ctrl-btn small" title="シャッフル">🔀</button>
+      <button id="btn-prev" class="ctrl-btn" title="前へ">⏮</button>
+      <button id="btn-playpause" class="ctrl-btn large" title="再生/一時停止">▶️</button>
+      <button id="btn-next" class="ctrl-btn" title="次へ">⏭</button>
+      <button id="btn-repeat" class="ctrl-btn small" title="リピート">🔁</button>
+    </div>
+  </section>
+
+  <!-- ===== ミニプレイヤー ===== -->
+  <div id="mini-player" class="mini-player hidden">
+    <img id="mini-artwork" class="mini-artwork" src="" alt="">
+    <div class="mini-meta">
+      <div id="mini-title" class="mini-title">曲名</div>
+      <div id="mini-artist" class="mini-artist">アーティスト</div>
+    </div>
+    <button id="mini-playpause" class="icon-btn" title="再生/一時停止">▶️</button>
+    <button id="mini-next" class="icon-btn" title="次へ">⏭</button>
+  </div>
+
+  <!-- ===== タブバー ===== -->
+  <nav id="tabbar" class="tabbar">
+    <button class="tab-btn active" data-tab="library">
+      <span class="tab-icon">🎵</span><span>ライブラリ</span>
+    </button>
+    <button class="tab-btn" data-tab="playlists">
+      <span class="tab-icon">📁</span><span>プレイリスト</span>
+    </button>
+  </nav>
+
+</div>
+
+<audio id="audio-el" preload="metadata" playsinline></audio>
+
+<!-- ID3タグ・歌詞・アルバムアート解析用 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.7/jsmediatags.min.js"></script>
+<script src="js/db.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
