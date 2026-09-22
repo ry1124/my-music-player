@@ -91,13 +91,28 @@ function bindUIEvents() {
 }
 
 // ===== ファイル取り込み(ID3解析) =====
+function makeSourceKey(file) {
+  return `${file.name}_${file.size}_${file.lastModified}`;
+}
+
 async function handleFilesSelected(fileList) {
   const files = Array.from(fileList);
   if (files.length === 0) return;
   const progressEl = document.getElementById('import-progress');
   progressEl.classList.remove('hidden');
+
+  const existingKeys = new Set(tracks.map(t => t.sourceKey).filter(Boolean));
+  let addedCount = 0;
+  let skippedCount = 0;
+
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
+    const sourceKey = makeSourceKey(file);
+    if (existingKeys.has(sourceKey)) {
+      skippedCount++;
+      progressEl.textContent = `取り込み中... (${i + 1}/${files.length}) 追加済みのためスキップ: ${file.name}`;
+      continue;
+    }
     progressEl.textContent = `取り込み中... (${i + 1}/${files.length}) ${file.name}`;
     try {
       const tags = await readTags(file);
@@ -113,17 +128,23 @@ async function handleFilesSelected(fileList) {
         mimeType: file.type || 'audio/mpeg',
         artworkBlob,
         lyrics,
+        sourceKey,
         addedAt: Date.now() + i,
       };
       const id = await DB.addTrack(track);
       track.id = id;
       tracks.push(track);
+      existingKeys.add(sourceKey);
+      addedCount++;
     } catch (err) {
       console.error('取り込み失敗:', file.name, err);
     }
   }
   progressEl.classList.add('hidden');
   renderTrackList(document.getElementById('search-input').value.trim());
+  if (skippedCount > 0) {
+    alert(`取り込み完了: 新規${addedCount}曲を追加、${skippedCount}曲は追加済みのためスキップしました`);
+  }
 }
 
 function readTags(file) {
