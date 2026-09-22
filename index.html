@@ -22,6 +22,7 @@
     <header class="topbar">
       <h1>ライブラリ</h1>
       <div class="topbar-actions">
+        <button id="btn-rescan-tags" class="icon-btn" title="年代・ジャンル情報を再スキャン">🏷</button>
         <button id="btn-auto-lyrics" class="icon-btn" title="歌詞をネットから自動検索">🔍</button>
         <button id="btn-import-lyrics" class="icon-btn" title="歌詞ファイルを一括読み込み">📝</button>
         <button id="btn-add" class="icon-btn" title="曲を追加">＋</button>
@@ -54,6 +55,32 @@
       <button id="btn-delete-playlist" class="icon-btn" title="削除">🗑</button>
     </header>
     <ul id="playlist-detail-list" class="track-list"></ul>
+  </section>
+
+  <!-- ===== 年代別画面 ===== -->
+  <section id="view-years" class="view">
+    <header class="topbar">
+      <h1>年代別</h1>
+    </header>
+    <ul id="year-list" class="playlist-list"></ul>
+  </section>
+
+  <!-- ===== ジャンル別画面 ===== -->
+  <section id="view-genres" class="view">
+    <header class="topbar">
+      <h1>ジャンル別</h1>
+    </header>
+    <ul id="genre-list" class="playlist-list"></ul>
+  </section>
+
+  <!-- ===== 年代/ジャンル 詳細画面(共通) ===== -->
+  <section id="view-group-detail" class="view">
+    <header class="topbar">
+      <button id="btn-back-group" class="icon-btn">‹ 戻る</button>
+      <h1 id="group-detail-title">グループ</h1>
+    </header>
+    <div id="group-genre-filter" class="filter-chips hidden"></div>
+    <ul id="group-detail-list" class="track-list"></ul>
   </section>
 
   <!-- ===== 再生中(Now Playing)画面 ===== -->
@@ -102,6 +129,12 @@
   <nav id="tabbar" class="tabbar">
     <button class="tab-btn active" data-tab="library">
       <span class="tab-icon">🎵</span><span>ライブラリ</span>
+    </button>
+    <button class="tab-btn" data-tab="years">
+      <span class="tab-icon">📅</span><span>年代</span>
+    </button>
+    <button class="tab-btn" data-tab="genres">
+      <span class="tab-icon">🎼</span><span>ジャンル</span>
     </button>
     <button class="tab-btn" data-tab="playlists">
       <span class="tab-icon">📁</span><span>プレイリスト</span>

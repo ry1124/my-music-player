@@ -10,6 +10,7 @@ let repeatMode = 'off';     // 'off' | 'all' | 'one'
 let currentAudioUrl = null;
 let seeking = false;
 let currentPlaylistId = null; // プレイリスト詳細画面で表示中のID
+let lastGroupListView = 'view-years'; // 年代/ジャンル詳細画面から「戻る」時にどちらに戻るか
 const artworkUrlCache = new Map(); // trackId -> objectURL
 
 const audioEl = document.getElementById('audio-el');
@@ -38,12 +39,20 @@ function showView(id) {
 }
 
 function bindUIEvents() {
+  const TAB_VIEW_MAP = {
+    library: 'view-library',
+    years: 'view-years',
+    genres: 'view-genres',
+    playlists: 'view-playlists',
+  };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       const tab = btn.dataset.tab;
-      showView(tab === 'library' ? 'view-library' : 'view-playlists');
+      if (tab === 'years') renderYearList();
+      else if (tab === 'genres') renderGenreList();
+      showView(TAB_VIEW_MAP[tab] || 'view-library');
     });
   });
 
@@ -64,6 +73,10 @@ function bindUIEvents() {
   });
 
   document.getElementById('btn-auto-lyrics').addEventListener('click', autoFetchLyrics);
+  document.getElementById('btn-rescan-tags').addEventListener('click', rescanYearGenreTags);
+  document.getElementById('btn-back-group').addEventListener('click', () => {
+    showView(lastGroupListView);
+  });
 
   document.getElementById('search-input').addEventListener('input', (e) => {
     renderTrackList(e.target.value.trim());
@@ -83,7 +96,9 @@ function bindUIEvents() {
 
   // Now Playing
   document.getElementById('btn-collapse-nowplaying').addEventListener('click', () => {
-    showView(document.querySelector('.tab-btn.active').dataset.tab === 'playlists' ? 'view-playlists' : 'view-library');
+    const tab = document.querySelector('.tab-btn.active').dataset.tab;
+    const map = { library: 'view-library', years: 'view-years', genres: 'view-genres', playlists: 'view-playlists' };
+    showView(map[tab] || 'view-library');
   });
   document.getElementById('btn-playpause').addEventListener('click', togglePlayPause);
   document.getElementById('btn-prev').addEventListener('click', playPrev);
@@ -107,6 +122,20 @@ function makeSourceKey(file) {
   return `${file.name}_${file.size}_${file.lastModified}`;
 }
 
+// "1993-05-01" や "(17)Rock" のような表記から、年(4桁)/ジャンル名だけを取り出す
+function extractYear(tags) {
+  const raw = tags && tags.year;
+  if (!raw) return '';
+  const m = String(raw).match(/\d{4}/);
+  return m ? m[0] : '';
+}
+
+function extractGenre(tags) {
+  const raw = tags && tags.genre;
+  if (!raw) return '';
+  return String(raw).replace(/^\(\d+\)/, '').trim();
+}
+
 async function importOneFile(file, sourceKey, orderHint) {
   const tags = await readTags(file);
   const duration = await getAudioDuration(file);
@@ -116,6 +145,8 @@ async function importOneFile(file, sourceKey, orderHint) {
     title: (tags.title && tags.title.trim()) || file.name.replace(/\.[^/.]+$/, ''),
     artist: (tags.artist && tags.artist.trim()) || '不明なアーティスト',
     album: (tags.album && tags.album.trim()) || '',
+    year: extractYear(tags),
+    genre: extractGenre(tags),
     duration,
     fileBlob: file,
     mimeType: file.type || 'audio/mpeg',
@@ -351,6 +382,157 @@ async function autoFetchLyrics() {
   progressEl.classList.add('hidden');
   if (currentTrack) { lastActiveLyricIdx = -1; updateLyricsPane(); }
   alert(`歌詞自動検索完了: ${found}曲ヒット(うち${syncedCount}曲は曲に合わせて動きます) / 見つからず${notFound}曲 / エラー${errorCount}件`);
+}
+
+// ===== 年代・ジャンル情報の再スキャン(既存曲にyear/genreを補完) =====
+let isRescanningTags = false;
+
+async function rescanYearGenreTags() {
+  if (isRescanningTags) { alert('すでに実行中です'); return; }
+  const targets = tracks.filter(t => !t.year && !t.genre);
+  if (targets.length === 0) { alert('すべての曲に年代・ジャンル情報があります(または元々タグが無く再取得できません)'); return; }
+  if (!confirm(`${targets.length}曲の年代・ジャンル情報を再スキャンします。曲数によっては数分かかることがあります。始めますか?`)) return;
+
+  isRescanningTags = true;
+  const progressEl = document.getElementById('import-progress');
+  progressEl.classList.remove('hidden');
+  let updated = 0;
+
+  for (let i = 0; i < targets.length; i += IMPORT_CONCURRENCY) {
+    const chunk = targets.slice(i, i + IMPORT_CONCURRENCY);
+    progressEl.textContent = `年代・ジャンルを再スキャン中... ${Math.min(i + IMPORT_CONCURRENCY, targets.length)}/${targets.length}曲`;
+    await Promise.all(chunk.map(async (track) => {
+      try {
+        const tags = await readTags(track.fileBlob);
+        const year = extractYear(tags);
+        const genre = extractGenre(tags);
+        if (year || genre) {
+          track.year = year;
+          track.genre = genre;
+          await DB.updateTrack(track);
+          updated++;
+        }
+      } catch (err) {
+        console.error('再スキャン失敗:', track.title, err);
+      }
+    }));
+  }
+
+  isRescanningTags = false;
+  progressEl.classList.add('hidden');
+  alert(`再スキャン完了: ${updated}/${targets.length}曲に年代・ジャンル情報を補完しました`);
+}
+
+// ===== 年代別・ジャンル別グルーピング =====
+function decadeLabel(track) {
+  if (!track.year) return '不明';
+  const y = parseInt(track.year, 10);
+  if (isNaN(y)) return '不明';
+  return `${Math.floor(y / 10) * 10}年代`;
+}
+
+function genreLabel(track) {
+  return track.genre && track.genre.trim() ? track.genre.trim() : '不明';
+}
+
+function renderGroupList(listElId, groupFn) {
+  const listEl = document.getElementById(listElId);
+  listEl.innerHTML = '';
+  const groups = new Map(); // label -> track[]
+  tracks.forEach((t) => {
+    const label = groupFn(t);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(t);
+  });
+  const sortedLabels = [...groups.keys()].sort((a, b) => {
+    if (a === '不明') return 1;
+    if (b === '不明') return -1;
+    return a.localeCompare(b, 'ja');
+  });
+  sortedLabels.forEach((label) => {
+    const groupTracks = groups.get(label);
+    const li = document.createElement('li');
+    li.className = 'playlist-item';
+    const img = document.createElement('img');
+    img.className = 'playlist-artwork';
+    img.src = getArtworkUrl(groupTracks[0]);
+    const meta = document.createElement('div');
+    meta.className = 'track-meta';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'playlist-name';
+    nameEl.textContent = label;
+    const countEl = document.createElement('div');
+    countEl.className = 'playlist-count';
+    countEl.textContent = `${groupTracks.length}曲`;
+    meta.appendChild(nameEl);
+    meta.appendChild(countEl);
+    li.appendChild(img);
+    li.appendChild(meta);
+    li.addEventListener('click', () => openGroupDetail(label, groupTracks, listElId === 'year-list' ? 'view-years' : 'view-genres'));
+    listEl.appendChild(li);
+  });
+}
+
+function renderYearList() { renderGroupList('year-list', decadeLabel); }
+function renderGenreList() { renderGroupList('genre-list', genreLabel); }
+
+function openGroupDetail(label, groupTracks, backView) {
+  lastGroupListView = backView;
+  document.getElementById('group-detail-title').textContent = label;
+
+  const filterEl = document.getElementById('group-genre-filter');
+  if (backView === 'view-years') {
+    renderGenreSubFilter(groupTracks);
+    filterEl.classList.remove('hidden');
+  } else {
+    filterEl.classList.add('hidden');
+  }
+
+  renderGroupDetailList(groupTracks);
+  showView('view-group-detail');
+}
+
+function renderGroupDetailList(list) {
+  const listEl = document.getElementById('group-detail-list');
+  listEl.innerHTML = '';
+  const ids = list.map(t => t.id);
+  list.forEach((track) => {
+    listEl.appendChild(buildTrackItem(track, ids));
+  });
+}
+
+// 年代詳細画面専用: その年代内の曲をさらにジャンルで絞り込むチップ(ジャンル別タブとは別物)
+function renderGenreSubFilter(groupTracks) {
+  const filterEl = document.getElementById('group-genre-filter');
+  filterEl.innerHTML = '';
+  const genres = [...new Set(groupTracks.map(t => genreLabel(t)))].sort((a, b) => {
+    if (a === '不明') return 1;
+    if (b === '不明') return -1;
+    return a.localeCompare(b, 'ja');
+  });
+
+  const allChip = document.createElement('div');
+  allChip.className = 'filter-chip active';
+  allChip.textContent = `すべて (${groupTracks.length})`;
+  allChip.addEventListener('click', () => {
+    filterEl.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+    allChip.classList.add('active');
+    renderGroupDetailList(groupTracks);
+  });
+  filterEl.appendChild(allChip);
+
+  genres.forEach((genre) => {
+    const filtered = groupTracks.filter(t => genreLabel(t) === genre);
+    const chip = document.createElement('div');
+    chip.className = 'filter-chip';
+    chip.textContent = `${genre} (${filtered.length})`;
+    chip.addEventListener('click', () => {
+      filterEl.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      renderGroupDetailList(filtered);
+    });
+    filterEl.appendChild(chip);
+  });
 }
 
 function extractLyrics(tags) {
