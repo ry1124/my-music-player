@@ -208,12 +208,41 @@ function pictureToBlob(picture) {
 }
 
 // ===== 外部歌詞ファイル(.lrc/.txt)の読み込み =====
+// LRC形式([mm:ss.xx]歌詞)をパースし、タイムスタンプ付きの行配列にする。
+// タイムスタンプが無い(通常の.txt等)場合は空配列を返す。
+function parseLrc(text) {
+  const lines = text.split(/\r?\n/);
+  const timeTagRegex = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+  const result = [];
+  for (const line of lines) {
+    const matches = [...line.matchAll(timeTagRegex)];
+    if (matches.length === 0) continue;
+    const lineText = line.replace(timeTagRegex, '').trim();
+    for (const m of matches) {
+      const min = parseInt(m[1], 10);
+      const sec = parseInt(m[2], 10);
+      const ms = m[3] ? parseInt(m[3].padEnd(3, '0'), 10) : 0;
+      result.push({ time: min * 60 + sec + ms / 1000, text: lineText });
+    }
+  }
+  result.sort((a, b) => a.time - b.time);
+  return result;
+}
+
 function stripLrcTimestamps(text) {
   return text
     .split(/\r?\n/)
     .map(line => line.replace(/\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]/g, '').trim())
     .filter(line => line.length > 0 && !/^\[[a-zA-Z]+:.*\]$/.test(line))
     .join('\n');
+}
+
+function applyLyricsText(track, text) {
+  const synced = parseLrc(text);
+  track.syncedLyrics = synced.length > 0 ? synced : null;
+  track.lyrics = synced.length > 0
+    ? synced.map(l => l.text).filter(Boolean).join('\n')
+    : stripLrcTimestamps(text);
 }
 
 function importLyricsForTrack(track) {
@@ -224,10 +253,10 @@ function importLyricsForTrack(track) {
     const file = input.files[0];
     if (!file) return;
     const text = await file.text();
-    track.lyrics = stripLrcTimestamps(text);
+    applyLyricsText(track, text);
     await DB.updateTrack(track);
-    alert(`「${track.title}」に歌詞を読み込みました`);
-    if (currentTrack && currentTrack.id === track.id) updateLyricsPane();
+    alert(`「${track.title}」に歌詞を読み込みました${track.syncedLyrics ? '(曲に合わせて動きます)' : ''}`);
+    if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
   };
   input.click();
 }
@@ -236,6 +265,7 @@ async function handleLyricsFilesSelected(fileList) {
   const files = Array.from(fileList);
   if (files.length === 0) return;
   let matched = 0;
+  let syncedCount = 0;
   const unmatchedNames = [];
   for (const file of files) {
     const baseName = file.name.replace(/\.[^/.]+$/, '').trim();
@@ -243,19 +273,20 @@ async function handleLyricsFilesSelected(fileList) {
     if (!track) { unmatchedNames.push(file.name); continue; }
     try {
       const text = await file.text();
-      track.lyrics = stripLrcTimestamps(text);
+      applyLyricsText(track, text);
       await DB.updateTrack(track);
       matched++;
+      if (track.syncedLyrics) syncedCount++;
     } catch (err) {
       console.error('歌詞読み込み失敗:', file.name, err);
       unmatchedNames.push(file.name);
     }
   }
-  if (currentTrack) updateLyricsPane();
+  if (currentTrack) { lastActiveLyricIdx = -1; updateLyricsPane(); }
   const unmatchedText = unmatchedNames.length > 0
     ? `\n\n曲名が一致せず未適用(${unmatchedNames.length}件):\n` + unmatchedNames.slice(0, 10).join('\n') + (unmatchedNames.length > 10 ? '\n...' : '')
     : '';
-  alert(`歌詞インポート完了: ${matched}曲に適用しました${unmatchedText}`);
+  alert(`歌詞インポート完了: ${matched}曲に適用(うち${syncedCount}曲は曲に合わせて動きます)${unmatchedText}`);
 }
 
 function extractLyrics(tags) {
@@ -570,6 +601,7 @@ function bindAudioEvents() {
     playNext();
   });
   audioEl.addEventListener('timeupdate', () => {
+    highlightCurrentLyricLine();
     if (seeking || !audioEl.duration) return;
     document.getElementById('seek-bar').value = (audioEl.currentTime / audioEl.duration) * 1000;
     document.getElementById('np-current-time').textContent = formatTime(audioEl.currentTime);
@@ -602,27 +634,68 @@ function formatTime(sec) {
 }
 
 // ===== 歌詞 =====
+let lastActiveLyricIdx = -1;
+
 function toggleLyrics() {
   const pane = document.getElementById('np-lyrics');
   pane.classList.toggle('hidden');
-  if (!pane.classList.contains('hidden')) updateLyricsPane();
+  if (!pane.classList.contains('hidden')) { lastActiveLyricIdx = -1; updateLyricsPane(); }
 }
 
 function updateLyricsPane() {
   const pane = document.getElementById('np-lyrics');
   if (pane.classList.contains('hidden')) return;
-  if (currentTrack.lyrics) {
-    pane.textContent = currentTrack.lyrics;
-    pane.onclick = null;
+  pane.innerHTML = '';
+  pane.onclick = null;
+
+  if (currentTrack.syncedLyrics && currentTrack.syncedLyrics.length > 0) {
+    currentTrack.syncedLyrics.forEach((line) => {
+      const div = document.createElement('div');
+      div.className = 'lyric-line';
+      div.textContent = line.text || '♪';
+      div.addEventListener('click', () => { audioEl.currentTime = line.time; });
+      pane.appendChild(div);
+    });
+    lastActiveLyricIdx = -1;
+    highlightCurrentLyricLine();
+  } else if (currentTrack.lyrics) {
+    const div = document.createElement('div');
+    div.style.whiteSpace = 'pre-wrap';
+    div.textContent = currentTrack.lyrics;
+    pane.appendChild(div);
   } else {
     pane.textContent = '歌詞が登録されていません。タップして入力';
     pane.onclick = async () => {
       const text = prompt('歌詞を入力してください', '');
       if (text === null) return;
       currentTrack.lyrics = text;
+      currentTrack.syncedLyrics = null;
       await DB.updateTrack(currentTrack);
       updateLyricsPane();
     };
+  }
+}
+
+// 再生位置に合わせて現在の行をハイライト+自動スクロール(timeupdateから呼ばれる)
+function highlightCurrentLyricLine() {
+  const pane = document.getElementById('np-lyrics');
+  if (pane.classList.contains('hidden')) return;
+  if (!currentTrack || !currentTrack.syncedLyrics || currentTrack.syncedLyrics.length === 0) return;
+
+  const t = audioEl.currentTime;
+  const lines = currentTrack.syncedLyrics;
+  let activeIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].time <= t) activeIdx = i;
+    else break;
+  }
+  if (activeIdx === lastActiveLyricIdx) return;
+  lastActiveLyricIdx = activeIdx;
+
+  const lineEls = pane.querySelectorAll('.lyric-line');
+  lineEls.forEach((el, idx) => el.classList.toggle('active', idx === activeIdx));
+  if (activeIdx >= 0 && lineEls[activeIdx]) {
+    lineEls[activeIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
 }
 

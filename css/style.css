@@ -206,11 +206,23 @@ html, body {
   background: rgba(0,0,0,0.85);
   border-radius: 10px;
   overflow-y: auto;
-  padding: 20px;
+  padding: 40% 20px;
   font-size: 16px;
   line-height: 2;
-  white-space: pre-wrap;
   text-align: center;
+}
+
+.lyric-line {
+  padding: 8px 0;
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: 500;
+  transition: color 0.25s ease, transform 0.25s ease;
+  cursor: pointer;
+}
+.lyric-line.active {
+  color: #ffffff;
+  font-weight: 700;
+  transform: scale(1.06);
 }
 
 .np-meta { text-align: center; margin-top: 8px; }
