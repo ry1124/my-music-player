@@ -63,6 +63,8 @@ function bindUIEvents() {
     e.target.value = '';
   });
 
+  document.getElementById('btn-auto-lyrics').addEventListener('click', autoFetchLyrics);
+
   document.getElementById('search-input').addEventListener('input', (e) => {
     renderTrackList(e.target.value.trim());
   });
@@ -287,6 +289,68 @@ async function handleLyricsFilesSelected(fileList) {
     ? `\n\n曲名が一致せず未適用(${unmatchedNames.length}件):\n` + unmatchedNames.slice(0, 10).join('\n') + (unmatchedNames.length > 10 ? '\n...' : '')
     : '';
   alert(`歌詞インポート完了: ${matched}曲に適用(うち${syncedCount}曲は曲に合わせて動きます)${unmatchedText}`);
+}
+
+// ===== 歌詞のネット自動検索(lrclib.net) =====
+const LRCLIB_BASE = 'https://lrclib.net/api';
+let isAutoFetchingLyrics = false;
+
+async function fetchLrcFromLrclib(artist, title) {
+  const url = `${LRCLIB_BASE}/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`;
+  const res = await fetch(url);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function autoFetchLyrics() {
+  if (isAutoFetchingLyrics) { alert('すでに検索中です'); return; }
+  const targets = tracks.filter(t => !t.lyrics);
+  if (targets.length === 0) { alert('歌詞が無い曲はありません'); return; }
+  if (!confirm(`歌詞が無い${targets.length}曲をネットで自動検索します。曲数によっては数分〜十数分かかります。アプリを開いたまま待つ必要があります。始めますか?`)) return;
+
+  isAutoFetchingLyrics = true;
+  const progressEl = document.getElementById('import-progress');
+  progressEl.classList.remove('hidden');
+  let found = 0, syncedCount = 0, notFound = 0, errorCount = 0;
+  const startTime = Date.now();
+
+  for (let i = 0; i < targets.length; i++) {
+    const track = targets[i];
+    const elapsedSec = (Date.now() - startTime) / 1000;
+    const rate = i / elapsedSec;
+    const etaMin = rate > 0 ? Math.ceil((targets.length - i) / rate / 60) : 0;
+    progressEl.textContent =
+      `歌詞をネット検索中... ${i + 1}/${targets.length}曲 (見つかった:${found}件) ` +
+      (etaMin > 0 ? `残り約${etaMin}分 ` : '') + track.title;
+    try {
+      const data = await fetchLrcFromLrclib(track.artist, track.title);
+      if (data && (data.syncedLyrics || data.plainLyrics)) {
+        if (data.syncedLyrics) {
+          const synced = parseLrc(data.syncedLyrics);
+          track.syncedLyrics = synced.length > 0 ? synced : null;
+          track.lyrics = synced.length > 0 ? synced.map(l => l.text).filter(Boolean).join('\n') : data.plainLyrics || '';
+          if (track.syncedLyrics) syncedCount++;
+        } else {
+          track.syncedLyrics = null;
+          track.lyrics = data.plainLyrics;
+        }
+        await DB.updateTrack(track);
+        found++;
+      } else {
+        notFound++;
+      }
+    } catch (err) {
+      console.error('歌詞検索失敗:', track.title, err);
+      errorCount++;
+    }
+    await new Promise(r => setTimeout(r, 250)); // lrclib.netへの負荷・レート制限を避けるための間隔
+  }
+
+  isAutoFetchingLyrics = false;
+  progressEl.classList.add('hidden');
+  if (currentTrack) { lastActiveLyricIdx = -1; updateLyricsPane(); }
+  alert(`歌詞自動検索完了: ${found}曲ヒット(うち${syncedCount}曲は曲に合わせて動きます) / 見つからず${notFound}曲 / エラー${errorCount}件`);
 }
 
 function extractLyrics(tags) {
