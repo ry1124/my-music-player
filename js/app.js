@@ -634,7 +634,7 @@ function renderAlbumFilter(groupTracks) {
 // 判定はジャンルタグだけで行う: 「J-Pop(Jポップ/jぽっぷ)」タグ → Jポップ、「洋楽」タグ → 洋楽。それ以外は「すべて」でのみ表示
 function originLabel(track) {
   const g = (track.genre || '').normalize('NFKC').trim().toLowerCase();
-  if (/^j[-\s]?(pop|ぽっぷ|ポップ)$/.test(g)) return 'Jポップ';
+  if (/^j[-\s]?(pop|ぽっぷ|ポップ)$/.test(g)) return 'J-Pop';
   if (/^(洋楽|ようがく|western)$/.test(g)) return '洋楽';
   return '';
 }
@@ -657,7 +657,7 @@ function renderGenreSubFilter(groupTracks) {
 
   const render = () => {
     regionEl.innerHTML = '';
-    ['すべて', 'Jポップ', '洋楽'].forEach((r) => {
+    ['すべて', 'J-Pop', '洋楽'].forEach((r) => {
       const n = r === 'すべて' ? groupTracks.length : groupTracks.filter(t => originLabel(t) === r).length;
       regionEl.appendChild(makeChip(`${r} (${n})`, region === r, () => { region = r; genre = 'すべて'; render(); }));
     });
@@ -669,7 +669,7 @@ function renderGenreSubFilter(groupTracks) {
       if (b === '不明') return -1;
       return a.localeCompare(b, 'ja');
     });
-    filterEl.appendChild(makeChip(`すべて (${base.length})`, genre === 'すべて', () => { genre = 'すべて'; render(); }));
+    filterEl.appendChild(makeChip(`全ジャンル (${base.length})`, genre === 'すべて', () => { genre = 'すべて'; render(); }));
     genres.forEach((g) => {
       const n = base.filter(t => genreLabel(t) === g).length;
       filterEl.appendChild(makeChip(`${g} (${n})`, genre === g, () => { genre = g; render(); }));
