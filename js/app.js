@@ -262,6 +262,7 @@ async function importOneFile(file, sourceKey, orderHint) {
     artistSort: extractSortName(tags, 'TSOP', 'TSP'),
     albumSort: extractSortName(tags, 'TSOA', 'TSA'),
     readingsScanned: true,
+    artworkScanned: true,
     duration,
     fileBlob: file,
     mimeType: file.type || 'audio/mpeg',
@@ -526,9 +527,9 @@ let isRescanningTags = false;
 
 async function rescanYearGenreTags() {
   if (isRescanningTags) { alert('すでに実行中です'); return; }
-  const targets = tracks.filter(t => !t.readingsScanned || !t.year || !t.genre || t.artist === UNKNOWN_ARTIST);
+  const targets = tracks.filter(t => !t.readingsScanned || !t.artworkScanned || !t.year || !t.genre || t.artist === UNKNOWN_ARTIST);
   if (targets.length === 0) { alert('すべての曲にタグ情報があります(または元々タグが無く再取得できません)'); return; }
-  if (!confirm(`${targets.length}曲のアーティスト・年代・ジャンル・読み(並び替え用)を再スキャンします。曲数によっては数分かかることがあります。始めますか?`)) return;
+  if (!confirm(`${targets.length}曲のアーティスト・年代・ジャンル・読み(並び替え用)・ジャケット画像を再スキャンします。曲数によっては数分かかることがあります。始めますか?`)) return;
 
   isRescanningTags = true;
   const progressEl = document.getElementById('import-progress');
@@ -549,6 +550,17 @@ async function rescanYearGenreTags() {
           track.artistSort = extractSortName(tags, 'TSOP', 'TSP');
           track.albumSort = extractSortName(tags, 'TSOA', 'TSA');
           track.readingsScanned = true;
+          changed = true;
+        }
+        if (!track.artworkScanned) {
+          if (!track.artworkBlob) {
+            const art = pictureToBlob(tags.picture);
+            if (art) {
+              track.artworkBlob = art;
+              artworkUrlCache.delete(track.id); // 古い(既定画像の)キャッシュを捨てて、次の描画で新しい画像を使う
+            }
+          }
+          track.artworkScanned = true;
           changed = true;
         }
         if (year && !track.year) { track.year = year; changed = true; }
@@ -574,7 +586,8 @@ async function rescanYearGenreTags() {
 
   isRescanningTags = false;
   progressEl.classList.add('hidden');
-  alert(`再スキャン完了: ${updated}/${targets.length}曲曲のタグ情報(年代・ジャンル・読みなど)を更新しました`);
+  renderTrackList(document.getElementById('search-input').value.trim());
+  alert(`再スキャン完了: ${updated}/${targets.length}曲のタグ情報(年代・ジャンル・読みなど)を更新しました`);
 }
 
 // ===== 年代別・ジャンル別グルーピング =====
