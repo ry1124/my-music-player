@@ -578,8 +578,8 @@ function openGroupDetail(label, groupTracks, backView) {
     regionEl.classList.remove('hidden');
   } else if (backView === 'view-genres') {
     filterEl.classList.add('hidden');
-    regionEl.classList.remove('hidden');
-    renderAlbumFilter(groupTracks); // 内部で一覧も描画する
+    regionEl.classList.add('hidden');
+    renderAlbumGrouped(groupTracks);
   } else {
     filterEl.classList.add('hidden');
     regionEl.classList.add('hidden');
@@ -597,37 +597,36 @@ function renderGroupDetailList(list) {
   });
 }
 
-// ジャンル詳細画面専用: アルバム名で絞り込む。「すべて」ならジャンル内の全曲が連続再生の対象になる
+// ジャンル詳細画面専用: 最初からアルバムごとの見出しを付けて全曲を並べる
+// 曲をタップするとジャンル内の全曲が(表示順に)連続再生される。見出しをタップするとそのアルバムだけ再生する
 function albumLabel(track) {
   return track.album && track.album.trim() ? track.album.trim() : 'アルバム不明';
 }
 
-function renderAlbumFilter(groupTracks) {
-  const regionEl = document.getElementById('group-region-filter');
-  let album = 'すべて';
-
-  const render = () => {
-    regionEl.innerHTML = '';
-    const chip = document.createElement('div');
-    chip.className = 'filter-chip active';
-    const n = album === 'すべて' ? groupTracks.length : groupTracks.filter(t => albumLabel(t) === album).length;
-    chip.textContent = `アルバム: ${album} (${n}曲) ▾`;
-    chip.addEventListener('click', async () => {
-      const albums = [...new Set(groupTracks.map(albumLabel))].sort((a, b) => {
-        if (a === 'アルバム不明') return 1;
-        if (b === 'アルバム不明') return -1;
-        return a.localeCompare(b, 'ja');
-      });
-      const options = [`すべて (${groupTracks.length}曲)`, ...albums.map(a => `${a} (${groupTracks.filter(t => albumLabel(t) === a).length}曲)`)];
-      const idx = await showChoiceSheet('アルバムで絞り込み', options);
-      if (idx < 0) return;
-      album = idx === 0 ? 'すべて' : albums[idx - 1];
-      render();
-    });
-    regionEl.appendChild(chip);
-    renderGroupDetailList(album === 'すべて' ? groupTracks : groupTracks.filter(t => albumLabel(t) === album));
-  };
-  render();
+function renderAlbumGrouped(groupTracks) {
+  const listEl = document.getElementById('group-detail-list');
+  listEl.innerHTML = '';
+  const groups = new Map();
+  groupTracks.forEach((t) => {
+    const a = albumLabel(t);
+    if (!groups.has(a)) groups.set(a, []);
+    groups.get(a).push(t);
+  });
+  const albums = [...groups.keys()].sort((a, b) => {
+    if (a === 'アルバム不明') return 1;
+    if (b === 'アルバム不明') return -1;
+    return a.localeCompare(b, 'ja');
+  });
+  const allIds = albums.flatMap(a => groups.get(a).map(t => t.id)); // 表示順=再生順
+  albums.forEach((a) => {
+    const list = groups.get(a);
+    const header = document.createElement('li');
+    header.className = 'album-header';
+    header.textContent = `${a} (${list.length}曲)  ▶`;
+    header.addEventListener('click', () => playTrackById(list[0].id, list.map(t => t.id)));
+    listEl.appendChild(header);
+    list.forEach((track) => listEl.appendChild(buildTrackItem(track, allIds)));
+  });
 }
 
 // 年代詳細画面専用: 「Jポップ / 洋楽」→ ジャンル の順で曲を絞り込むチップ(ジャンル別タブとは別物)
