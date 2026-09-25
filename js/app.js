@@ -571,14 +571,20 @@ function openGroupDetail(label, groupTracks, backView) {
   document.getElementById('group-detail-title').textContent = label;
 
   const filterEl = document.getElementById('group-genre-filter');
+  const regionEl = document.getElementById('group-region-filter');
   if (backView === 'view-years') {
-    renderGenreSubFilter(groupTracks);
+    renderGenreSubFilter(groupTracks); // 内部で一覧も描画する
     filterEl.classList.remove('hidden');
+    regionEl.classList.remove('hidden');
+  } else if (backView === 'view-genres') {
+    filterEl.classList.add('hidden');
+    regionEl.classList.remove('hidden');
+    renderAlbumFilter(groupTracks); // 内部で一覧も描画する
   } else {
     filterEl.classList.add('hidden');
+    regionEl.classList.add('hidden');
+    renderGroupDetailList(groupTracks);
   }
-
-  renderGroupDetailList(groupTracks);
   showView('view-group-detail');
 }
 
@@ -591,38 +597,86 @@ function renderGroupDetailList(list) {
   });
 }
 
-// 年代詳細画面専用: その年代内の曲をさらにジャンルで絞り込むチップ(ジャンル別タブとは別物)
-function renderGenreSubFilter(groupTracks) {
-  const filterEl = document.getElementById('group-genre-filter');
-  filterEl.innerHTML = '';
-  const genres = [...new Set(groupTracks.map(t => genreLabel(t)))].sort((a, b) => {
-    if (a === '不明') return 1;
-    if (b === '不明') return -1;
-    return a.localeCompare(b, 'ja');
-  });
+// ジャンル詳細画面専用: アルバム名で絞り込む。「すべて」ならジャンル内の全曲が連続再生の対象になる
+function albumLabel(track) {
+  return track.album && track.album.trim() ? track.album.trim() : 'アルバム不明';
+}
 
-  const allChip = document.createElement('div');
-  allChip.className = 'filter-chip active';
-  allChip.textContent = `すべて (${groupTracks.length})`;
-  allChip.addEventListener('click', () => {
-    filterEl.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-    allChip.classList.add('active');
-    renderGroupDetailList(groupTracks);
-  });
-  filterEl.appendChild(allChip);
+function renderAlbumFilter(groupTracks) {
+  const regionEl = document.getElementById('group-region-filter');
+  let album = 'すべて';
 
-  genres.forEach((genre) => {
-    const filtered = groupTracks.filter(t => genreLabel(t) === genre);
+  const render = () => {
+    regionEl.innerHTML = '';
     const chip = document.createElement('div');
-    chip.className = 'filter-chip';
-    chip.textContent = `${genre} (${filtered.length})`;
-    chip.addEventListener('click', () => {
-      filterEl.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-      chip.classList.add('active');
-      renderGroupDetailList(filtered);
+    chip.className = 'filter-chip active';
+    const n = album === 'すべて' ? groupTracks.length : groupTracks.filter(t => albumLabel(t) === album).length;
+    chip.textContent = `アルバム: ${album} (${n}曲) ▾`;
+    chip.addEventListener('click', async () => {
+      const albums = [...new Set(groupTracks.map(albumLabel))].sort((a, b) => {
+        if (a === 'アルバム不明') return 1;
+        if (b === 'アルバム不明') return -1;
+        return a.localeCompare(b, 'ja');
+      });
+      const options = [`すべて (${groupTracks.length}曲)`, ...albums.map(a => `${a} (${groupTracks.filter(t => albumLabel(t) === a).length}曲)`)];
+      const idx = await showChoiceSheet('アルバムで絞り込み', options);
+      if (idx < 0) return;
+      album = idx === 0 ? 'すべて' : albums[idx - 1];
+      render();
     });
-    filterEl.appendChild(chip);
-  });
+    regionEl.appendChild(chip);
+    renderGroupDetailList(album === 'すべて' ? groupTracks : groupTracks.filter(t => albumLabel(t) === album));
+  };
+  render();
+}
+
+// 年代詳細画面専用: 「Jポップ / 洋楽」→ ジャンル の順で曲を絞り込むチップ(ジャンル別タブとは別物)
+// 判定はジャンルタグだけで行う: 「J-Pop(Jポップ/jぽっぷ)」タグ → Jポップ、「洋楽」タグ → 洋楽。それ以外は「すべて」でのみ表示
+function originLabel(track) {
+  const g = (track.genre || '').normalize('NFKC').trim().toLowerCase();
+  if (/^j[-\s]?(pop|ぽっぷ|ポップ)$/.test(g)) return 'Jポップ';
+  if (/^(洋楽|ようがく|western)$/.test(g)) return '洋楽';
+  return '';
+}
+
+function renderGenreSubFilter(groupTracks) {
+  const regionEl = document.getElementById('group-region-filter');
+  const filterEl = document.getElementById('group-genre-filter');
+  let region = 'すべて';
+  let genre = 'すべて';
+
+  const byRegion = () => groupTracks.filter(t => region === 'すべて' || originLabel(t) === region);
+  const currentList = () => byRegion().filter(t => genre === 'すべて' || genreLabel(t) === genre);
+  const makeChip = (text, active, onClick) => {
+    const chip = document.createElement('div');
+    chip.className = 'filter-chip' + (active ? ' active' : '');
+    chip.textContent = text;
+    chip.addEventListener('click', onClick);
+    return chip;
+  };
+
+  const render = () => {
+    regionEl.innerHTML = '';
+    ['すべて', 'Jポップ', '洋楽'].forEach((r) => {
+      const n = r === 'すべて' ? groupTracks.length : groupTracks.filter(t => originLabel(t) === r).length;
+      regionEl.appendChild(makeChip(`${r} (${n})`, region === r, () => { region = r; genre = 'すべて'; render(); }));
+    });
+
+    filterEl.innerHTML = '';
+    const base = byRegion();
+    const genres = [...new Set(base.map(t => genreLabel(t)))].sort((a, b) => {
+      if (a === '不明') return 1;
+      if (b === '不明') return -1;
+      return a.localeCompare(b, 'ja');
+    });
+    filterEl.appendChild(makeChip(`すべて (${base.length})`, genre === 'すべて', () => { genre = 'すべて'; render(); }));
+    genres.forEach((g) => {
+      const n = base.filter(t => genreLabel(t) === g).length;
+      filterEl.appendChild(makeChip(`${g} (${n})`, genre === g, () => { genre = g; render(); }));
+    });
+    renderGroupDetailList(currentList());
+  };
+  render();
 }
 
 function extractLyrics(tags) {
