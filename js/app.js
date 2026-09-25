@@ -147,7 +147,7 @@ function bindUIEvents() {
   document.getElementById('btn-rescan-tags').addEventListener('click', rescanYearGenreTags);
   document.getElementById('btn-year-sort').addEventListener('click', () => {
     yearSortOrder = yearSortOrder === 'desc' ? 'asc' : 'desc';
-    document.getElementById('btn-year-sort').textContent = yearSortOrder === 'desc' ? '新→古' : '古→新';
+    document.getElementById('btn-year-sort').textContent = yearSortOrder === 'desc' ? '降順(新→古)' : '昇順(古→新)';
     renderYearList();
   });
   document.getElementById('btn-back-group').addEventListener('click', () => {

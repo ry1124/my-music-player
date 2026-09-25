@@ -334,3 +334,5 @@ html, body {
 .np-open #view-nowplaying { padding-bottom: calc(24px + var(--safe-bottom)); }
 .view.has-index .search-bar, .view.has-index .play-row, .view.has-index .import-progress { margin-right: 26px; }
 .view.has-index .search-bar, .view.has-index .play-row { padding-right: 16px; }
+
+.year-sort-btn { font-size: 14px; font-weight: 600; white-space: nowrap; }
