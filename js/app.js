@@ -656,22 +656,42 @@ function openGenreAlbumTracks(albumName, list) {
   renderGroupDetailList(list);
 }
 
-// 年代詳細画面専用: 「Jポップ / 洋楽」→ ジャンル の順で曲を絞り込むチップ(ジャンル別タブとは別物)
-// 判定はジャンルタグだけで行う: 「J-Pop(Jポップ/jぽっぷ)」タグ → Jポップ、「洋楽」タグ → 洋楽。それ以外は「すべて」でのみ表示
-function originLabel(track) {
+// 年代詳細画面専用: 「J-Pop / Anime / 洋楽 / 特撮 / ボカロ」→ ジャンル の順で曲を絞り込むチップ(ジャンル別タブとは別物)
+// 判定はジャンルタグだけで行う。チップの表記は、ライブラリ内でそのジャンルに実際に付いているタグの表記(最多のもの)を使う
+const ORIGIN_DEFS = [
+  { key: 'jpop', label: 'J-Pop', re: /^j[-\s]?(pop|ぽっぷ|ポップ)$/ },
+  { key: 'anime', label: 'Anime', re: /^(アニメ|あにめ|anime)$/ },
+  { key: 'western', label: '洋楽', re: /^(洋楽|ようがく|western)$/ },
+  { key: 'tokusatsu', label: '特撮', re: /^(特撮|とくさつ|tokusatsu)$/ },
+  { key: 'vocaloid', label: 'ボカロ', re: /^(ボカロ|ぼかろ|vocaloid|ボーカロイド)$/ },
+];
+
+function originKey(track) {
   const g = (track.genre || '').normalize('NFKC').trim().toLowerCase();
-  if (/^j[-\s]?(pop|ぽっぷ|ポップ)$/.test(g)) return 'J-Pop';
-  if (/^(洋楽|ようがく|western)$/.test(g)) return '洋楽';
-  return '';
+  const def = ORIGIN_DEFS.find(d => d.re.test(g));
+  return def ? def.key : '';
+}
+
+// そのジャンルに実際に付いているタグ表記(最多)。ライブラリに1曲も無ければ既定の表記
+function originDisplayLabel(def) {
+  const counts = new Map();
+  tracks.forEach((t) => {
+    if (originKey(t) === def.key) {
+      const raw = t.genre.trim();
+      counts.set(raw, (counts.get(raw) || 0) + 1);
+    }
+  });
+  if (counts.size === 0) return def.label;
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
 }
 
 function renderGenreSubFilter(groupTracks) {
   const regionEl = document.getElementById('group-region-filter');
   const filterEl = document.getElementById('group-genre-filter');
-  let region = 'すべて';
+  let region = 'all';
   let genre = 'すべて';
 
-  const byRegion = () => groupTracks.filter(t => region === 'すべて' || originLabel(t) === region);
+  const byRegion = () => groupTracks.filter(t => region === 'all' || originKey(t) === region);
   const currentList = () => byRegion().filter(t => genre === 'すべて' || genreLabel(t) === genre);
   const makeChip = (text, active, onClick) => {
     const chip = document.createElement('div');
@@ -683,9 +703,11 @@ function renderGenreSubFilter(groupTracks) {
 
   const render = () => {
     regionEl.innerHTML = '';
-    ['すべて', 'J-Pop', '洋楽'].forEach((r) => {
-      const n = r === 'すべて' ? groupTracks.length : groupTracks.filter(t => originLabel(t) === r).length;
-      regionEl.appendChild(makeChip(`${r} (${n})`, region === r, () => { region = r; genre = 'すべて'; render(); }));
+    const entries = [{ key: 'all', text: 'すべて', n: groupTracks.length }].concat(
+      ORIGIN_DEFS.map(d => ({ key: d.key, text: originDisplayLabel(d), n: groupTracks.filter(t => originKey(t) === d.key).length }))
+    );
+    entries.forEach((e) => {
+      regionEl.appendChild(makeChip(`${e.text} (${e.n})`, region === e.key, () => { region = e.key; genre = 'すべて'; render(); }));
     });
 
     filterEl.innerHTML = '';
