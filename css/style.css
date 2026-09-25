@@ -297,9 +297,3 @@ html, body {
 .sheet-list .sheet-btn:first-child { border-top: none; }
 .sheet-btn.danger { color: #ff453a; }
 .sheet-btn.cancel { border-radius: 14px; font-weight: 600; border-top: none; }
-
-/* ジャンル詳細のアルバム見出し */
-.album-header {
-  list-style: none; padding: 14px 16px 6px; font-size: 14px; font-weight: 700;
-  color: var(--accent); background: var(--bg, #000); cursor: pointer;
-}

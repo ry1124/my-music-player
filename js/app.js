@@ -100,6 +100,11 @@ function bindUIEvents() {
     renderYearList();
   });
   document.getElementById('btn-back-group').addEventListener('click', () => {
+    // ジャンルの曲一覧から戻るときは、まずアルバム一覧へ戻る
+    if (lastGroupListView === 'view-genres' && genreCtx && genreCtx.album !== null) {
+      renderGenreAlbumList(genreCtx.genre, genreCtx.tracks);
+      return;
+    }
     showView(lastGroupListView);
   });
 
@@ -579,7 +584,7 @@ function openGroupDetail(label, groupTracks, backView) {
   } else if (backView === 'view-genres') {
     filterEl.classList.add('hidden');
     regionEl.classList.add('hidden');
-    renderAlbumGrouped(groupTracks);
+    renderGenreAlbumList(label, groupTracks);
   } else {
     filterEl.classList.add('hidden');
     regionEl.classList.add('hidden');
@@ -597,13 +602,16 @@ function renderGroupDetailList(list) {
   });
 }
 
-// ジャンル詳細画面専用: 最初からアルバムごとの見出しを付けて全曲を並べる
-// 曲をタップするとジャンル内の全曲が(表示順に)連続再生される。見出しをタップするとそのアルバムだけ再生する
+// ジャンル詳細画面専用: ジャンル → アルバム一覧 → 曲 の3段階。先頭の「すべての曲」でジャンル内の全曲を連続再生できる
+let genreCtx = null; // { genre, tracks, album }  album===null ならアルバム一覧を表示中
+
 function albumLabel(track) {
   return track.album && track.album.trim() ? track.album.trim() : 'アルバム不明';
 }
 
-function renderAlbumGrouped(groupTracks) {
+function renderGenreAlbumList(genre, groupTracks) {
+  genreCtx = { genre, tracks: groupTracks, album: null };
+  document.getElementById('group-detail-title').textContent = genre;
   const listEl = document.getElementById('group-detail-list');
   listEl.innerHTML = '';
   const groups = new Map();
@@ -617,16 +625,35 @@ function renderAlbumGrouped(groupTracks) {
     if (b === 'アルバム不明') return -1;
     return a.localeCompare(b, 'ja');
   });
-  const allIds = albums.flatMap(a => groups.get(a).map(t => t.id)); // 表示順=再生順
-  albums.forEach((a) => {
-    const list = groups.get(a);
-    const header = document.createElement('li');
-    header.className = 'album-header';
-    header.textContent = `${a} (${list.length}曲)  ▶`;
-    header.addEventListener('click', () => playTrackById(list[0].id, list.map(t => t.id)));
-    listEl.appendChild(header);
-    list.forEach((track) => listEl.appendChild(buildTrackItem(track, allIds)));
-  });
+  const addRow = (name, list, onClick) => {
+    const li = document.createElement('li');
+    li.className = 'playlist-item';
+    const img = document.createElement('img');
+    img.className = 'playlist-artwork';
+    img.src = getArtworkUrl(list.find(t => t.artworkBlob) || list[0]);
+    const meta = document.createElement('div');
+    meta.className = 'track-meta';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'playlist-name';
+    nameEl.textContent = name;
+    const countEl = document.createElement('div');
+    countEl.className = 'playlist-count';
+    countEl.textContent = `${list.length}曲`;
+    meta.appendChild(nameEl);
+    meta.appendChild(countEl);
+    li.appendChild(img);
+    li.appendChild(meta);
+    li.addEventListener('click', onClick);
+    listEl.appendChild(li);
+  };
+  addRow('すべての曲', groupTracks, () => openGenreAlbumTracks('すべての曲', groupTracks));
+  albums.forEach((a) => addRow(a, groups.get(a), () => openGenreAlbumTracks(a, groups.get(a))));
+}
+
+function openGenreAlbumTracks(albumName, list) {
+  genreCtx.album = albumName;
+  document.getElementById('group-detail-title').textContent = `${genreCtx.genre} › ${albumName}`;
+  renderGroupDetailList(list);
 }
 
 // 年代詳細画面専用: 「Jポップ / 洋楽」→ ジャンル の順で曲を絞り込むチップ(ジャンル別タブとは別物)
