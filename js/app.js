@@ -149,7 +149,10 @@ function makeSourceKey(file) {
 
 // "1993-05-01" や "(17)Rock" のような表記から、年(4桁)/ジャンル名だけを取り出す
 function extractYear(tags) {
-  const raw = tags && tags.year;
+  if (!tags) return '';
+  // jsmediatagsはID3v2.3のTYERだけを year にする。v2.4のTDRC等はフレーム名のまま入っている
+  const frameData = (f) => (f && f.data !== undefined ? f.data : '');
+  const raw = tags.year || frameData(tags.TDRC) || frameData(tags.TDOR) || frameData(tags.TDRL) || frameData(tags.TORY);
   if (!raw) return '';
   const m = String(raw).match(/\d{4}/);
   return m ? m[0] : '';
@@ -448,7 +451,7 @@ let isRescanningTags = false;
 
 async function rescanYearGenreTags() {
   if (isRescanningTags) { alert('すでに実行中です'); return; }
-  const targets = tracks.filter(t => (!t.year && !t.genre) || t.artist === UNKNOWN_ARTIST);
+  const targets = tracks.filter(t => !t.year || !t.genre || t.artist === UNKNOWN_ARTIST);
   if (targets.length === 0) { alert('すべての曲にタグ情報があります(または元々タグが無く再取得できません)'); return; }
   if (!confirm(`${targets.length}曲のアーティスト・年代・ジャンル情報を再スキャンします。曲数によっては数分かかることがあります。始めますか?`)) return;
 
@@ -466,11 +469,8 @@ async function rescanYearGenreTags() {
         const year = extractYear(tags);
         const genre = extractGenre(tags);
         let changed = false;
-        if (year || genre) {
-          track.year = year;
-          track.genre = genre;
-          changed = true;
-        }
+        if (year && !track.year) { track.year = year; changed = true; }
+        if (genre && !track.genre) { track.genre = genre; changed = true; }
         if (track.artist === UNKNOWN_ARTIST) {
           const tagArtist = tags.artist && tags.artist.trim();
           const nameArtist = parseFileName(track.fileBlob.name || '').artist;
@@ -710,16 +710,47 @@ function buildTrackItem(track, queueIds) {
 }
 
 // ===== アクションシート(簡易メニュー) =====
-function openTrackActionSheet(track) {
+// 画面下からせり上がる選択メニュー。選んだ項目の番号を返す(キャンセルは -1)
+function showChoiceSheet(title, options) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'sheet-overlay';
+    const sheet = document.createElement('div');
+    sheet.className = 'sheet';
+    const close = (idx) => { overlay.remove(); resolve(idx); };
+    if (title) {
+      const t = document.createElement('div');
+      t.className = 'sheet-title';
+      t.textContent = title;
+      sheet.appendChild(t);
+    }
+    const list = document.createElement('div');
+    list.className = 'sheet-list';
+    options.forEach((label, i) => {
+      const b = document.createElement('button');
+      b.className = 'sheet-btn' + (/削除/.test(label) ? ' danger' : '');
+      b.textContent = label;
+      b.addEventListener('click', () => close(i));
+      list.appendChild(b);
+    });
+    sheet.appendChild(list);
+    const cancel = document.createElement('button');
+    cancel.className = 'sheet-btn cancel';
+    cancel.textContent = 'キャンセル';
+    cancel.addEventListener('click', () => close(-1));
+    sheet.appendChild(cancel);
+    overlay.appendChild(sheet);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(-1); });
+    document.body.appendChild(overlay);
+  });
+}
+
+async function openTrackActionSheet(track) {
   const options = ['プレイリストに追加', '歌詞ファイルを読み込む'];
   if (currentPlaylistId !== null) options.push('このプレイリストから削除');
-  options.push('ライブラリから削除', 'キャンセル');
-  const choice = prompt(
-    `${track.title}\n\n番号を入力してください:\n` + options.map((o, i) => `${i + 1}. ${o}`).join('\n'),
-    ''
-  );
-  const idx = parseInt(choice, 10) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= options.length) return;
+  options.push('ライブラリから削除');
+  const idx = await showChoiceSheet(track.title, options);
+  if (idx < 0) return;
   const label = options[idx];
   if (label === 'プレイリストに追加') addTrackToPlaylistPrompt(track.id);
   else if (label === '歌詞ファイルを読み込む') importLyricsForTrack(track);
@@ -810,10 +841,8 @@ async function addTrackToPlaylistPrompt(trackId) {
     renderPlaylistList();
     return;
   }
-  const listText = playlists.map((p, i) => `${i + 1}. ${p.name}`).join('\n');
-  const choice = prompt(`追加先のプレイリスト番号を入力してください:\n${listText}`, '');
-  const idx = parseInt(choice, 10) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= playlists.length) return;
+  const idx = await showChoiceSheet('追加先のプレイリスト', playlists.map(p => p.name));
+  if (idx < 0) return;
   const pl = playlists[idx];
   if (!pl.trackIds.includes(trackId)) {
     pl.trackIds.push(trackId);
@@ -928,6 +957,10 @@ function updateNowPlayingUI() {
   document.getElementById('mini-artwork').src = getArtworkUrl(currentTrack);
   document.getElementById('mini-title').textContent = currentTrack.title;
   document.getElementById('mini-artist').textContent = currentTrack.artist;
+  // 歌詞がある曲は既定で歌詞を表示、無い曲はジャケット表示に戻す
+  const hasLyrics = !!(currentTrack.lyrics || (currentTrack.syncedLyrics && currentTrack.syncedLyrics.length > 0));
+  document.getElementById('np-lyrics').classList.toggle('hidden', !hasLyrics);
+  lastActiveLyricIdx = -1;
   updateLyricsPane();
 }
 
