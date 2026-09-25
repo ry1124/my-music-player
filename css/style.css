@@ -271,3 +271,5 @@ html, body {
 @media (min-width: 700px) {
   .np-artwork-wrap { max-width: 420px; }
 }
+
+.app-version { font-size: 12px; font-weight: 400; color: var(--text-dim); margin-left: 6px; }

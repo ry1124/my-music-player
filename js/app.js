@@ -18,6 +18,7 @@ const audioEl = document.getElementById('audio-el');
 // ===== 初期化 =====
 window.addEventListener('DOMContentLoaded', async () => {
   registerServiceWorker();
+  document.getElementById('app-version').textContent = APP_VERSION;
   tracks = await DB.getAllTracks();
   playlists = await DB.getAllPlaylists();
   renderTrackList();
@@ -218,6 +219,7 @@ async function handleFilesSelected(fileList) {
   let addedCount = 0;
   let processedCount = 0;
   const failures = [];
+  tagReadErrors = [];
   const startTime = Date.now();
 
   const updateProgress = (fileName) => {
@@ -260,15 +262,33 @@ async function handleFilesSelected(fileList) {
   const totalSec = Math.round((Date.now() - startTime) / 1000);
   const timeText = totalSec >= 60 ? `${Math.floor(totalSec / 60)}分${totalSec % 60}秒` : `${totalSec}秒`;
   alert(`取り込み完了: 新規${addedCount}曲を追加、${skippedCount}曲は追加済みのためスキップ(所要${timeText})` +
-    (failures.length > 0 ? `\n\n失敗${failures.length}件:\n${failures.slice(0, 5).join('\n')}` : ''));
+    (failures.length > 0 ? `\n\n失敗${failures.length}件:\n${failures.slice(0, 5).join('\n')}` : '') +
+    (tagReadErrors.length > 0 ? `\n\nタグ情報を取得できなかった曲${tagReadErrors.length}件:\n${tagReadErrors.slice(0, 3).join('\n')}` : ''));
 }
+
+// タグ読み取りに失敗した理由(診断用)。取り込み完了ダイアログに表示する
+let tagReadErrors = [];
 
 function readTags(file) {
   return new Promise((resolve) => {
-    if (typeof jsmediatags === 'undefined') { resolve({}); return; }
+    if (typeof jsmediatags === 'undefined') {
+      tagReadErrors.push(`${file.name}: タグ読取ライブラリ(jsmediatags)が読み込めていません`);
+      resolve({});
+      return;
+    }
     jsmediatags.read(file, {
-      onSuccess: (tag) => resolve(tag.tags || {}),
-      onError: () => resolve({}),
+      onSuccess: (tag) => {
+        const tags = tag.tags || {};
+        if (!tags.title && !tags.artist && !tags.album) {
+          tagReadErrors.push(`${file.name}: タグ形式=${tag.type || '不明'}だが中身が空(ファイルにタグ情報が無い可能性)`);
+        }
+        resolve(tags);
+      },
+      onError: (err) => {
+        const reason = err && (err.type ? `${err.type}${err.info ? ':' + err.info : ''}` : err.message);
+        tagReadErrors.push(`${file.name}: 読取エラー(${reason || '不明'})`);
+        resolve({});
+      },
     });
   });
 }
@@ -656,6 +676,7 @@ function renderTrackList(filter = '') {
 function buildTrackItem(track, queueIds) {
   const li = document.createElement('li');
   li.className = 'track-item' + (currentTrack && currentTrack.id === track.id ? ' playing' : '');
+  li.dataset.trackId = track.id;
 
   const img = document.createElement('img');
   img.className = 'track-artwork';
@@ -829,7 +850,15 @@ function loadAndPlay(track) {
   updateNowPlayingUI();
   updateMediaSession();
   showMiniPlayer();
-  renderTrackList(document.getElementById('search-input').value.trim());
+  refreshPlayingHighlight();
+}
+
+// 全ての曲一覧(ライブラリ/年代/ジャンル/アーティスト/プレイリスト詳細)で再生中の曲だけ強調する
+function refreshPlayingHighlight() {
+  const playingId = currentTrack ? String(currentTrack.id) : null;
+  document.querySelectorAll('.track-item').forEach((el) => {
+    el.classList.toggle('playing', el.dataset.trackId === playingId);
+  });
 }
 
 function togglePlayPause() {

@@ -1,16 +1,18 @@
 // オフラインでも起動できるように、アプリ本体のファイルをキャッシュする
-const CACHE_NAME = 'my-music-cache-v6';
+importScripts('./js/version.js');
+const CACHE_NAME = 'my-music-cache-' + APP_VERSION;
 const CORE_ASSETS = [
   './',
   './index.html',
   './manifest.json',
   './css/style.css',
+  './js/version.js',
   './js/db.js',
   './js/app.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/default-artwork.png',
-  'https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.7/jsmediatags.min.js',
+  './js/jsmediatags.min.js',
 ];
 
 self.addEventListener('install', (event) => {

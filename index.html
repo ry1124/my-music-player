@@ -20,7 +20,7 @@
   <!-- ===== ライブラリ画面 ===== -->
   <section id="view-library" class="view active">
     <header class="topbar">
-      <h1>ライブラリ</h1>
+      <h1>ライブラリ <span id="app-version" class="app-version"></span></h1>
       <div class="topbar-actions">
         <button id="btn-rescan-tags" class="icon-btn" title="年代・ジャンル情報を再スキャン">🏷</button>
         <button id="btn-auto-lyrics" class="icon-btn" title="歌詞をネットから自動検索">🔍</button>
@@ -158,7 +158,8 @@
 <audio id="audio-el" preload="metadata" playsinline></audio>
 
 <!-- ID3タグ・歌詞・アルバムアート解析用 -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.7/jsmediatags.min.js"></script>
+<script src="js/jsmediatags.min.js"></script>
+<script src="js/version.js"></script>
 <script src="js/db.js"></script>
 <script src="js/app.js"></script>
 </body>
