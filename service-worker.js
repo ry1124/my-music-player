@@ -1,5 +1,5 @@
 // オフラインでも起動できるように、アプリ本体のファイルをキャッシュする
-const CACHE_NAME = 'my-music-cache-v4';
+const CACHE_NAME = 'my-music-cache-v6';
 const CORE_ASSETS = [
   './',
   './index.html',

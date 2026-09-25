@@ -43,6 +43,7 @@ function bindUIEvents() {
     library: 'view-library',
     years: 'view-years',
     genres: 'view-genres',
+    artists: 'view-artists',
     playlists: 'view-playlists',
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -52,6 +53,7 @@ function bindUIEvents() {
       const tab = btn.dataset.tab;
       if (tab === 'years') renderYearList();
       else if (tab === 'genres') renderGenreList();
+      else if (tab === 'artists') renderArtistList();
       showView(TAB_VIEW_MAP[tab] || 'view-library');
     });
   });
@@ -119,7 +121,7 @@ function bindUIEvents() {
   // Now Playing
   document.getElementById('btn-collapse-nowplaying').addEventListener('click', () => {
     const tab = document.querySelector('.tab-btn.active').dataset.tab;
-    const map = { library: 'view-library', years: 'view-years', genres: 'view-genres', playlists: 'view-playlists' };
+    const map = { library: 'view-library', years: 'view-years', genres: 'view-genres', artists: 'view-artists', playlists: 'view-playlists' };
     showView(map[tab] || 'view-library');
   });
   document.getElementById('btn-playpause').addEventListener('click', togglePlayPause);
@@ -158,14 +160,26 @@ function extractGenre(tags) {
   return String(raw).replace(/^\(\d+\)/, '').trim();
 }
 
+const UNKNOWN_ARTIST = '不明なアーティスト';
+
+// タグに情報が無い場合の保険: ファイル名「アーティスト - 曲名」から推定する
+function parseFileName(fileName) {
+  const base = fileName.replace(/\.[^/.]+$/, '');
+  const m = base.match(/^(.+?)\s*[-－―–]\s*(.+)$/);
+  if (!m) return { artist: '', title: base };
+  return { artist: m[1].trim(), title: m[2].trim() };
+}
+
 async function importOneFile(file, sourceKey, orderHint) {
   const tags = await readTags(file);
   const duration = await getAudioDuration(file);
   const artworkBlob = pictureToBlob(tags.picture);
   const lyrics = extractLyrics(tags);
+  const fromName = parseFileName(file.name);
+  const hasArtistTag = !!(tags.artist && tags.artist.trim());
   const track = {
-    title: (tags.title && tags.title.trim()) || file.name.replace(/\.[^/.]+$/, ''),
-    artist: (tags.artist && tags.artist.trim()) || '不明なアーティスト',
+    title: (tags.title && tags.title.trim()) || (hasArtistTag ? file.name.replace(/\.[^/.]+$/, '') : fromName.title),
+    artist: (hasArtistTag && tags.artist.trim()) || fromName.artist || UNKNOWN_ARTIST,
     album: (tags.album && tags.album.trim()) || '',
     year: extractYear(tags),
     genre: extractGenre(tags),
@@ -414,9 +428,9 @@ let isRescanningTags = false;
 
 async function rescanYearGenreTags() {
   if (isRescanningTags) { alert('すでに実行中です'); return; }
-  const targets = tracks.filter(t => !t.year && !t.genre);
-  if (targets.length === 0) { alert('すべての曲に年代・ジャンル情報があります(または元々タグが無く再取得できません)'); return; }
-  if (!confirm(`${targets.length}曲の年代・ジャンル情報を再スキャンします。曲数によっては数分かかることがあります。始めますか?`)) return;
+  const targets = tracks.filter(t => (!t.year && !t.genre) || t.artist === UNKNOWN_ARTIST);
+  if (targets.length === 0) { alert('すべての曲にタグ情報があります(または元々タグが無く再取得できません)'); return; }
+  if (!confirm(`${targets.length}曲のアーティスト・年代・ジャンル情報を再スキャンします。曲数によっては数分かかることがあります。始めますか?`)) return;
 
   isRescanningTags = true;
   const progressEl = document.getElementById('import-progress');
@@ -431,9 +445,22 @@ async function rescanYearGenreTags() {
         const tags = await readTags(track.fileBlob);
         const year = extractYear(tags);
         const genre = extractGenre(tags);
+        let changed = false;
         if (year || genre) {
           track.year = year;
           track.genre = genre;
+          changed = true;
+        }
+        if (track.artist === UNKNOWN_ARTIST) {
+          const tagArtist = tags.artist && tags.artist.trim();
+          const nameArtist = parseFileName(track.fileBlob.name || '').artist;
+          const artist = tagArtist || nameArtist;
+          if (artist) {
+            track.artist = artist;
+            changed = true;
+          }
+        }
+        if (changed) {
           await DB.updateTrack(track);
           updated++;
         }
@@ -505,13 +532,19 @@ function renderGroupList(listElId, groupFn, sortFn) {
     meta.appendChild(countEl);
     li.appendChild(img);
     li.appendChild(meta);
-    li.addEventListener('click', () => openGroupDetail(label, groupTracks, listElId === 'year-list' ? 'view-years' : 'view-genres'));
+    const backView = { 'year-list': 'view-years', 'genre-list': 'view-genres', 'artist-list': 'view-artists' }[listElId];
+    li.addEventListener('click', () => openGroupDetail(label, groupTracks, backView));
     listEl.appendChild(li);
   });
 }
 
 function renderYearList() { renderGroupList('year-list', yearLabel, yearSortFn); }
 function renderGenreList() { renderGroupList('genre-list', genreLabel); }
+
+function artistLabel(track) {
+  return track.artist && track.artist.trim() && track.artist !== UNKNOWN_ARTIST ? track.artist.trim() : '不明';
+}
+function renderArtistList() { renderGroupList('artist-list', artistLabel); }
 
 function openGroupDetail(label, groupTracks, backView) {
   lastGroupListView = backView;
