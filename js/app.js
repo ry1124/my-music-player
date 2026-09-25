@@ -60,8 +60,25 @@ function bindUIEvents() {
     document.getElementById('file-input').click();
   });
   document.getElementById('file-input').addEventListener('change', (e) => {
-    handleFilesSelected(e.target.files);
+    // 選択画面ではiOSが音楽ファイルを絞り込めない場合があるため、ここで拡張子/MIMEで判定する
+    const audioFiles = Array.from(e.target.files).filter(
+      (f) => f.type.startsWith('audio/') || /\.(mp3|m4a|aac|flac|wav|aiff?|alac|ogg|opus|caf|mp4)$/i.test(f.name)
+    );
+    if (audioFiles.length === 0 && e.target.files.length > 0) {
+      alert('音楽ファイル(mp3/m4a/flac/wav等)が選択されていません');
+    }
+    handleFilesSelected(audioFiles);
     e.target.value = '';
+  });
+
+  // PCブラウザでの利用向け: ドラッグ&ドロップで曲を追加
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files).filter(
+      (f) => f.type.startsWith('audio/') || /\.(mp3|m4a|aac|flac|wav|aiff?|alac|ogg|opus|caf)$/i.test(f.name)
+    );
+    if (files.length > 0) handleFilesSelected(files);
   });
 
   document.getElementById('btn-import-lyrics').addEventListener('click', () => {
@@ -186,6 +203,7 @@ async function handleFilesSelected(fileList) {
 
   let addedCount = 0;
   let processedCount = 0;
+  const failures = [];
   const startTime = Date.now();
 
   const updateProgress = (fileName) => {
@@ -209,6 +227,7 @@ async function handleFilesSelected(fileList) {
         return track;
       } catch (err) {
         console.error('取り込み失敗:', file.name, err);
+        failures.push(`${file.name}(${err && err.message ? err.message : err})`);
         return null;
       } finally {
         updateProgress(file.name);
@@ -226,7 +245,8 @@ async function handleFilesSelected(fileList) {
   renderTrackList(document.getElementById('search-input').value.trim());
   const totalSec = Math.round((Date.now() - startTime) / 1000);
   const timeText = totalSec >= 60 ? `${Math.floor(totalSec / 60)}分${totalSec % 60}秒` : `${totalSec}秒`;
-  alert(`取り込み完了: 新規${addedCount}曲を追加、${skippedCount}曲は追加済みのためスキップ(所要${timeText})`);
+  alert(`取り込み完了: 新規${addedCount}曲を追加、${skippedCount}曲は追加済みのためスキップ(所要${timeText})` +
+    (failures.length > 0 ? `\n\n失敗${failures.length}件:\n${failures.slice(0, 5).join('\n')}` : ''));
 }
 
 function readTags(file) {
@@ -567,7 +587,8 @@ function getAudioDuration(file) {
     const url = URL.createObjectURL(file);
     const a = new Audio();
     a.preload = 'metadata';
-    const cleanup = (val) => { URL.revokeObjectURL(url); resolve(val); };
+    const timer = setTimeout(() => cleanup(0), 5000); // iOSでメタデータ読込が完了しない場合の保険
+    const cleanup = (val) => { clearTimeout(timer); URL.revokeObjectURL(url); resolve(val); };
     a.onloadedmetadata = () => cleanup(a.duration || 0);
     a.onerror = () => cleanup(0);
     a.src = url;
