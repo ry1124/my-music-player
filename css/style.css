@@ -309,8 +309,13 @@ html, body {
 .index-bar {
   position: fixed; right: 2px; z-index: 20;
   top: calc(var(--safe-top) + 110px); bottom: calc(130px + var(--safe-bottom));
-  width: 20px; display: flex; flex-direction: column; justify-content: space-between; align-items: center;
+  width: 24px; display: flex; flex-direction: column; justify-content: space-between; align-items: center;
   font-size: 10px; font-weight: 700; color: var(--accent); line-height: 1;
   touch-action: none; user-select: none; -webkit-user-select: none;
+  border-radius: 10px; transition: background 0.15s;
 }
-.view.has-index .track-list, .view.has-index .playlist-list { padding-right: 26px; }
+.index-bar.touching { background: rgba(120, 120, 128, 0.35); }
+.index-bar span { width: 20px; text-align: center; border-radius: 50%; }
+.index-bar span.current { background: var(--accent); color: #fff; }
+
+.view.has-index .track-list, .view.has-index .playlist-list { padding-right: 30px; }

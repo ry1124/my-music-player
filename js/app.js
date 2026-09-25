@@ -865,22 +865,71 @@ function jumpToSection(label) {
   view.scrollTop += hit.getBoundingClientRect().top - view.getBoundingClientRect().top - offset;
 }
 
+// 触覚フィードバック(文字が切り替わるたびの「コツッ」)。iPhoneのSafariにはVibration APIが無いため、
+// iOS 17.4以降の <input type=checkbox switch> をプログラムから切り替えたときの触覚を利用する。非対応の端末では何も起きない
+let hapticLabel = null;
+function hapticTick() {
+  try {
+    if (!hapticLabel) {
+      hapticLabel = document.createElement('label');
+      hapticLabel.setAttribute('aria-hidden', 'true');
+      hapticLabel.style.display = 'none';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.setAttribute('switch', '');
+      hapticLabel.appendChild(input);
+      document.head.appendChild(hapticLabel);
+    }
+    hapticLabel.click();
+    if (navigator.vibrate) navigator.vibrate(8); // Android等
+  } catch (e) { /* 触覚が使えなくても動作に影響しない */ }
+}
+
+// iOS標準の一覧インデックスと同様: 文字1つ1つが独立した当たり判定を持ち、指が別の文字に移るたびに触覚+ジャンプする
 function setupIndexBar() {
   const bar = document.getElementById('index-bar');
-  INDEX_LABELS.forEach((l) => {
+  const spans = INDEX_LABELS.map((l) => {
     const span = document.createElement('span');
     span.textContent = l;
     bar.appendChild(span);
+    return span;
   });
+  let lastLabel = null;
+
   const labelAt = (clientY) => {
     const r = bar.getBoundingClientRect();
     const i = Math.min(INDEX_LABELS.length - 1, Math.max(0, Math.floor(((clientY - r.top) / r.height) * INDEX_LABELS.length)));
-    return INDEX_LABELS[i];
+    return { label: INDEX_LABELS[i], i };
   };
-  const onTouch = (e) => { e.preventDefault(); jumpToSection(labelAt(e.touches[0].clientY)); };
+  const touchAt = (clientY) => {
+    const { label, i } = labelAt(clientY);
+    bar.classList.add('touching');
+    spans.forEach((sp, k) => sp.classList.toggle('current', k === i));
+    if (label !== lastLabel) { // 文字が変わったときだけ
+      lastLabel = label;
+      hapticTick();
+      jumpToSection(label);
+    }
+  };
+  const release = () => {
+    lastLabel = null;
+    bar.classList.remove('touching');
+    spans.forEach(sp => sp.classList.remove('current'));
+  };
+
+  const onTouch = (e) => { e.preventDefault(); touchAt(e.touches[0].clientY); };
   bar.addEventListener('touchstart', onTouch, { passive: false });
   bar.addEventListener('touchmove', onTouch, { passive: false });
-  bar.addEventListener('click', (e) => jumpToSection(labelAt(e.clientY))); // PCブラウザ用
+  bar.addEventListener('touchend', release);
+  bar.addEventListener('touchcancel', release);
+  // PCブラウザ用
+  bar.addEventListener('mousedown', (e) => {
+    touchAt(e.clientY);
+    const move = (ev) => touchAt(ev.clientY);
+    const up = () => { release(); window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
 }
 
 // ===== 一覧の先頭に置く「再生 / シャッフル」ボタン(Apple Musicと同様) =====
