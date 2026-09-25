@@ -297,3 +297,10 @@ html, body {
 .sheet-list .sheet-btn:first-child { border-top: none; }
 .sheet-btn.danger { color: #ff453a; }
 .sheet-btn.cancel { border-radius: 14px; font-weight: 600; border-top: none; }
+
+/* ===== 一覧先頭の 再生 / シャッフル ボタン ===== */
+.play-row { list-style: none; display: flex; gap: 12px; padding: 8px 16px 12px; }
+.play-row-btn {
+  flex: 1; border: none; border-radius: 10px; padding: 12px 0;
+  background: var(--surface2); color: var(--accent); font-size: 16px; font-weight: 700;
+}

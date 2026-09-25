@@ -578,8 +578,8 @@ function openGroupDetail(label, groupTracks, backView) {
   const filterEl = document.getElementById('group-genre-filter');
   const regionEl = document.getElementById('group-region-filter');
   if (backView === 'view-years') {
-    renderGenreSubFilter(groupTracks); // 内部で一覧も描画する
     filterEl.classList.remove('hidden');
+    renderGenreSubFilter(groupTracks); // 内部で一覧も描画する(下の段が空なら非表示にする)
     regionEl.classList.remove('hidden');
   } else if (backView === 'view-genres') {
     filterEl.classList.add('hidden');
@@ -597,6 +597,7 @@ function renderGroupDetailList(list) {
   const listEl = document.getElementById('group-detail-list');
   listEl.innerHTML = '';
   const ids = list.map(t => t.id);
+  if (ids.length > 0) listEl.appendChild(buildPlayRow(ids));
   list.forEach((track) => {
     listEl.appendChild(buildTrackItem(track, ids));
   });
@@ -656,14 +657,12 @@ function openGenreAlbumTracks(albumName, list) {
   renderGroupDetailList(list);
 }
 
-// 年代詳細画面専用: 「J-Pop / Anime / 洋楽 / 特撮 / ボカロ」→ ジャンル の順で曲を絞り込むチップ(ジャンル別タブとは別物)
+// 年代詳細画面専用: 「J-Pop / Anime / 洋楽」→ ジャンル(特撮・ボカロ等は下の段のジャンルで選ぶ) の順で曲を絞り込むチップ(ジャンル別タブとは別物)
 // 判定はジャンルタグだけで行う。チップの表記は、ライブラリ内でそのジャンルに実際に付いているタグの表記(最多のもの)を使う
 const ORIGIN_DEFS = [
   { key: 'jpop', label: 'J-Pop', re: /^j[-\s]?(pop|ぽっぷ|ポップ)$/ },
   { key: 'anime', label: 'Anime', re: /^(アニメ|あにめ|anime)$/ },
   { key: 'western', label: '洋楽', re: /^(洋楽|ようがく|western)$/ },
-  { key: 'tokusatsu', label: '特撮', re: /^(特撮|とくさつ|tokusatsu)$/ },
-  { key: 'vocaloid', label: 'ボカロ', re: /^(ボカロ|ぼかろ|vocaloid|ボーカロイド)$/ },
 ];
 
 function originKey(track) {
@@ -685,14 +684,20 @@ function originDisplayLabel(def) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
 }
 
+// 複数選択可: 上の段(J-Pop/Anime/洋楽)と下の段(それ以外のジャンル)で選んだ項目のどれかに当てはまる曲を表示する。何も選ばなければ全曲
 function renderGenreSubFilter(groupTracks) {
   const regionEl = document.getElementById('group-region-filter');
   const filterEl = document.getElementById('group-genre-filter');
-  let region = 'all';
-  let genre = 'すべて';
+  const selOrigins = new Set(); // 選択中の上の段(key)
+  const selGenres = new Set();  // 選択中の下の段(ジャンル名)
 
-  const byRegion = () => groupTracks.filter(t => region === 'all' || originKey(t) === region);
-  const currentList = () => byRegion().filter(t => genre === 'すべて' || genreLabel(t) === genre);
+  const noSelection = () => selOrigins.size === 0 && selGenres.size === 0;
+  const isSelected = (t) => {
+    const k = originKey(t);
+    return k ? selOrigins.has(k) : selGenres.has(genreLabel(t));
+  };
+  const currentList = () => (noSelection() ? groupTracks : groupTracks.filter(isSelected));
+  const toggle = (set, v) => { if (set.has(v)) set.delete(v); else set.add(v); };
   const makeChip = (text, active, onClick) => {
     const chip = document.createElement('div');
     chip.className = 'filter-chip' + (active ? ' active' : '');
@@ -703,25 +708,26 @@ function renderGenreSubFilter(groupTracks) {
 
   const render = () => {
     regionEl.innerHTML = '';
-    const entries = [{ key: 'all', text: 'すべて', n: groupTracks.length }].concat(
-      ORIGIN_DEFS.map(d => ({ key: d.key, text: originDisplayLabel(d), n: groupTracks.filter(t => originKey(t) === d.key).length }))
-    );
-    entries.forEach((e) => {
-      regionEl.appendChild(makeChip(`${e.text} (${e.n})`, region === e.key, () => { region = e.key; genre = 'すべて'; render(); }));
+    regionEl.appendChild(makeChip(`すべて (${groupTracks.length})`, noSelection(), () => {
+      selOrigins.clear(); selGenres.clear(); render();
+    }));
+    ORIGIN_DEFS.forEach((d) => {
+      const n = groupTracks.filter(t => originKey(t) === d.key).length;
+      regionEl.appendChild(makeChip(`${originDisplayLabel(d)} (${n})`, selOrigins.has(d.key), () => { toggle(selOrigins, d.key); render(); }));
     });
 
+    // 上の段(J-Pop/Anime/洋楽)にあるジャンルは、下の段では重複するので出さない
     filterEl.innerHTML = '';
-    const base = byRegion();
-    const genres = [...new Set(base.map(t => genreLabel(t)))].sort((a, b) => {
+    const genres = [...new Set(groupTracks.filter(t => !originKey(t)).map(t => genreLabel(t)))].sort((a, b) => {
       if (a === '不明') return 1;
       if (b === '不明') return -1;
       return a.localeCompare(b, 'ja');
     });
-    filterEl.appendChild(makeChip(`全ジャンル (${base.length})`, genre === 'すべて', () => { genre = 'すべて'; render(); }));
     genres.forEach((g) => {
-      const n = base.filter(t => genreLabel(t) === g).length;
-      filterEl.appendChild(makeChip(`${g} (${n})`, genre === g, () => { genre = g; render(); }));
+      const n = groupTracks.filter(t => !originKey(t) && genreLabel(t) === g).length;
+      filterEl.appendChild(makeChip(`${g} (${n})`, selGenres.has(g), () => { toggle(selGenres, g); render(); }));
     });
+    filterEl.classList.toggle('hidden', genres.length === 0);
     renderGroupDetailList(currentList());
   };
   render();
@@ -770,9 +776,38 @@ function renderTrackList(filter = '') {
 
   emptyHint.classList.toggle('hidden', tracks.length > 0);
 
+  if (filtered.length > 0) listEl.appendChild(buildPlayRow(filtered.map(t => t.id)));
   filtered.forEach(track => {
     listEl.appendChild(buildTrackItem(track, filtered.map(t => t.id)));
   });
+}
+
+// ===== 一覧の先頭に置く「再生 / シャッフル」ボタン(Apple Musicと同様) =====
+function setShuffle(on) {
+  isShuffle = on;
+  document.getElementById('btn-shuffle').classList.toggle('active', isShuffle);
+}
+
+function playAll(ids, shuffle) {
+  if (!ids || ids.length === 0) return;
+  setShuffle(shuffle);
+  const startId = shuffle ? ids[Math.floor(Math.random() * ids.length)] : ids[0];
+  playTrackById(startId, ids);
+}
+
+function buildPlayRow(ids) {
+  const li = document.createElement('li');
+  li.className = 'play-row';
+  const mk = (label, shuffle) => {
+    const b = document.createElement('button');
+    b.className = 'play-row-btn';
+    b.textContent = label;
+    b.addEventListener('click', () => playAll(ids, shuffle));
+    return b;
+  };
+  li.appendChild(mk('▶ 再生', false));
+  li.appendChild(mk('🔀 シャッフル', true));
+  return li;
 }
 
 function buildTrackItem(track, queueIds) {
@@ -916,6 +951,7 @@ function openPlaylistDetail(playlistId) {
   const listEl = document.getElementById('playlist-detail-list');
   listEl.innerHTML = '';
   const plTracks = pl.trackIds.map(id => tracks.find(t => t.id === id)).filter(Boolean);
+  if (plTracks.length > 0) listEl.appendChild(buildPlayRow(plTracks.map(t => t.id)));
   plTracks.forEach(track => {
     listEl.appendChild(buildTrackItem(track, pl.trackIds));
   });
