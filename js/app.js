@@ -15,6 +15,50 @@ const artworkUrlCache = new Map(); // trackId -> objectURL
 
 const audioEl = document.getElementById('audio-el');
 
+// ===== アイコン(単色SVG。currentColor で色を変える) =====
+const svgIcon = (path, size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" aria-hidden="true">${path}</svg>`;
+const ICON_PATHS = {
+  play: '<path d="M8 5v14l11-7z"/>',
+  pause: '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>',
+  next: '<path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>',
+  prev: '<path d="M6 6h2v12H6zm3.5 6l8.5 6V6l-8.5 6z"/>',
+  shuffle: '<path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>',
+  repeat: '<path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>',
+  repeatOne: '<path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2V9h-1l-2 1v1h1.5v4h1.5z"/>',
+  lyrics: '<path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/>',
+  tabLibrary: '<path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 5h-3v5.5c0 1.38-1.12 2.5-2.5 2.5S10 13.88 10 12.5s1.12-2.5 2.5-2.5c.57 0 1.08.19 1.5.51V5h4v2zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z"/>',
+  tabYears: '<path d="M17 12h-5v5h5v-5zM16 1v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-1V1h-2zm3 18H5V8h14v11z"/>',
+  tabGenres: '<path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/>',
+  tabArtists: '<path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>',
+  tabPlaylists: '<path d="M19 9H2v2h17V9zm0-4H2v2h17V5zM2 15h13v-2H2v2zm15-2v6l5-3-5-3z"/>',
+  tag: '<path d="M17.63 5.84C17.27 5.33 16.67 5 16 5L5 5.01C3.9 5.01 3 5.9 3 7v10c0 1.1.9 1.99 2 1.99L16 19c.67 0 1.27-.33 1.63-.84L22 12l-4.37-6.16z"/>',
+  search: '<path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>',
+  doc: '<path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>',
+  add: '<path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>',
+};
+
+function setupIcons() {
+  const set = (id, key, size) => { document.getElementById(id).innerHTML = svgIcon(ICON_PATHS[key], size); };
+  set('btn-prev', 'prev', 38);
+  set('btn-next', 'next', 38);
+  set('btn-playpause', 'play', 64);
+  set('btn-shuffle', 'shuffle', 24);
+  set('btn-repeat', 'repeat', 24);
+  set('btn-lyrics-toggle', 'lyrics', 24);
+  set('mini-playpause', 'play', 28);
+  set('mini-next', 'next', 28);
+  // タブバー・上部ボタンも単色アイコンにする(白い画面でカラー絵文字が浮かないように)
+  const tabIcons = { library: 'tabLibrary', years: 'tabYears', genres: 'tabGenres', artists: 'tabArtists', playlists: 'tabPlaylists' };
+  Object.entries(tabIcons).forEach(([tab, key]) => {
+    document.querySelector(`.tab-btn[data-tab="${tab}"] .tab-icon`).innerHTML = svgIcon(ICON_PATHS[key], 24);
+  });
+  set('btn-rescan-tags', 'tag', 22);
+  set('btn-auto-lyrics', 'search', 22);
+  set('btn-import-lyrics', 'doc', 22);
+  set('btn-add', 'add', 26);
+  set('btn-new-playlist', 'add', 26);
+}
+
 // ===== 初期化 =====
 window.addEventListener('DOMContentLoaded', async () => {
   registerServiceWorker();
@@ -23,6 +67,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   playlists = await DB.getAllPlaylists();
   renderTrackList();
   renderPlaylistList();
+  setupIcons();
   setupIndexBar();
   showView('view-library'); // 起動直後の画面でもインデックスバーの表示状態を反映
   bindUIEvents();
@@ -42,6 +87,7 @@ function showView(id) {
   indexListId = INDEX_VIEWS[id] || null;
   document.getElementById('index-bar').classList.toggle('hidden', !indexListId);
   document.getElementById(id).classList.toggle('has-index', !!indexListId);
+  document.body.classList.toggle('np-open', id === 'view-nowplaying'); // 再生画面ではミニプレイヤー/タブバーを隠す
 }
 
 function bindUIEvents() {
@@ -141,6 +187,7 @@ function bindUIEvents() {
   document.getElementById('btn-shuffle').addEventListener('click', toggleShuffle);
   document.getElementById('btn-repeat').addEventListener('click', cycleRepeat);
   document.getElementById('btn-lyrics-toggle').addEventListener('click', toggleLyrics);
+  document.getElementById('btn-np-more').addEventListener('click', () => { if (currentTrack) openTrackActionSheet(currentTrack); });
 
   const seekBar = document.getElementById('seek-bar');
   seekBar.addEventListener('input', () => { seeking = true; });
@@ -948,15 +995,15 @@ function playAll(ids, shuffle) {
 function buildPlayRow(ids) {
   const li = document.createElement('li');
   li.className = 'play-row';
-  const mk = (label, shuffle) => {
+  const mk = (iconKey, label, shuffle) => {
     const b = document.createElement('button');
     b.className = 'play-row-btn';
-    b.textContent = label;
+    b.innerHTML = `${svgIcon(ICON_PATHS[iconKey], 20)}<span>${label}</span>`;
     b.addEventListener('click', () => playAll(ids, shuffle));
     return b;
   };
-  li.appendChild(mk('▶ 再生', false));
-  li.appendChild(mk('🔀 シャッフル', true));
+  li.appendChild(mk('play', '再生', false));
+  li.appendChild(mk('shuffle', 'シャッフル', true));
   return li;
 }
 
@@ -1220,7 +1267,7 @@ function cycleRepeat() {
   repeatMode = repeatMode === 'off' ? 'all' : repeatMode === 'all' ? 'one' : 'off';
   const btn = document.getElementById('btn-repeat');
   btn.classList.toggle('active', repeatMode !== 'off');
-  btn.textContent = repeatMode === 'one' ? '🔂' : '🔁';
+  btn.innerHTML = svgIcon(ICON_PATHS[repeatMode === 'one' ? 'repeatOne' : 'repeat'], 24);
 }
 
 function shuffleArray(arr, keepFirst) {
@@ -1289,9 +1336,8 @@ function bindAudioEvents() {
 }
 
 function setPlayPauseIcon(playing) {
-  const icon = playing ? '⏸' : '▶️';
-  document.getElementById('btn-playpause').textContent = icon;
-  document.getElementById('mini-playpause').textContent = icon;
+  document.getElementById('btn-playpause').innerHTML = svgIcon(ICON_PATHS[playing ? 'pause' : 'play'], 64);
+  document.getElementById('mini-playpause').innerHTML = svgIcon(ICON_PATHS[playing ? 'pause' : 'play'], 28);
 }
 
 function formatTime(sec) {

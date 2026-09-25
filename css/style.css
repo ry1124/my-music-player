@@ -1,11 +1,11 @@
 :root {
-  --bg: #000000;
-  --surface: #1c1c1e;
-  --surface2: #2c2c2e;
-  --text: #ffffff;
-  --text-dim: #98989d;
+  --bg: #ffffff;
+  --surface: #f2f2f7;
+  --surface2: #efeff4;
+  --text: #000000;
+  --text-dim: #8a8a8e;
   --accent: #fa2d48;
-  --border: #38383a;
+  --border: #e5e5ea;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -148,7 +148,8 @@ html, body {
   left: 8px;
   right: 8px;
   bottom: calc(58px + var(--safe-bottom));
-  background: #2c2c2eee;
+  background: rgba(247, 247, 250, 0.94);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-radius: 10px;
@@ -172,7 +173,7 @@ html, body {
   height: calc(50px + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
   display: flex;
-  background: #1c1c1ee6;
+  background: rgba(249, 249, 249, 0.94);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-top: 0.5px solid var(--border);
@@ -196,7 +197,7 @@ html, body {
 
 /* ===== Now Playing ===== */
 #view-nowplaying {
-  background: linear-gradient(180deg, #3a3a3c, #000000 60%);
+  background: linear-gradient(180deg, #ececf1, #ffffff 65%);
   padding-left: 20px;
   padding-right: 20px;
   align-items: stretch;
@@ -217,12 +218,12 @@ html, body {
   object-fit: cover;
   border-radius: 10px;
   background: var(--surface2);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
 }
 .np-lyrics {
   position: absolute;
   inset: 0;
-  background: rgba(0,0,0,0.85);
+  background: rgba(255,255,255,0.94);
   border-radius: 10px;
   overflow-y: auto;
   padding: 40% 20px;
@@ -233,20 +234,23 @@ html, body {
 
 .lyric-line {
   padding: 8px 0;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(0, 0, 0, 0.35);
   font-weight: 500;
   transition: color 0.25s ease, transform 0.25s ease;
   cursor: pointer;
 }
 .lyric-line.active {
-  color: #ffffff;
+  color: #000000;
   font-weight: 700;
   transform: scale(1.06);
 }
 
-.np-meta { text-align: center; margin-top: 8px; }
-.np-title { font-size: 20px; font-weight: 700; }
-.np-artist { font-size: 15px; color: var(--text-dim); margin-top: 2px; }
+.np-meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; text-align: left; }
+.np-meta-text { flex: 1; min-width: 0; }
+.np-title { font-size: 21px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-artist { font-size: 18px; color: var(--accent); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-more { width: 32px; height: 32px; border-radius: 50%; background: var(--surface2); color: var(--text-dim); font-size: 18px; padding: 0; flex-shrink: 0; }
+.np-topbar-spacer { width: 40px; }
 
 .np-seek { margin-top: 18px; }
 .np-seek input[type="range"] {
@@ -259,14 +263,14 @@ html, body {
 .np-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-top: 20px;
-  padding: 0 4px;
+  justify-content: center;
+  gap: 44px;
+  margin-top: 24px;
 }
-.ctrl-btn { background: none; border: none; color: var(--text); font-size: 30px; padding: 8px; }
-.ctrl-btn.large { font-size: 52px; }
-.ctrl-btn.small { font-size: 18px; color: var(--text-dim); }
+.ctrl-btn { background: none; border: none; color: var(--text); padding: 8px; display: flex; align-items: center; justify-content: center; }
+.ctrl-btn.small { color: var(--text-dim); }
 .ctrl-btn.small.active { color: var(--accent); }
+.np-bottom { display: flex; align-items: center; justify-content: space-around; margin-top: 28px; padding: 0 24px; }
 
 @media (min-width: 700px) {
   .np-artwork-wrap { max-width: 420px; }
@@ -277,7 +281,7 @@ html, body {
 /* ===== 選択メニュー(アクションシート) ===== */
 .sheet-overlay {
   position: fixed; inset: 0; z-index: 1000;
-  background: rgba(0,0,0,0.5);
+  background: rgba(0,0,0,0.35);
   display: flex; align-items: flex-end; justify-content: center;
 }
 .sheet {
@@ -287,12 +291,12 @@ html, body {
 }
 .sheet-title {
   text-align: center; padding: 10px 12px; font-size: 13px; color: var(--text-dim);
-  background: #2c2c2e; border-radius: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: #f2f2f7; border-radius: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.sheet-list { display: flex; flex-direction: column; overflow-y: auto; background: #2c2c2e; border-radius: 14px; }
+.sheet-list { display: flex; flex-direction: column; overflow-y: auto; background: #f2f2f7; border-radius: 14px; }
 .sheet-btn {
-  background: #2c2c2e; color: var(--accent); border: none; font-size: 17px;
-  padding: 15px 12px; border-top: 1px solid #3a3a3c; text-align: center;
+  background: #f2f2f7; color: var(--accent); border: none; font-size: 17px;
+  padding: 15px 12px; border-top: 1px solid #d8d8dd; text-align: center;
 }
 .sheet-list .sheet-btn:first-child { border-top: none; }
 .sheet-btn.danger { color: #ff453a; }
@@ -303,6 +307,7 @@ html, body {
 .play-row-btn {
   flex: 1; border: none; border-radius: 10px; padding: 12px 0;
   background: var(--surface2); color: var(--accent); font-size: 16px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
 }
 
 /* ===== 右端のインデックスバー ===== */
@@ -314,8 +319,18 @@ html, body {
   touch-action: none; user-select: none; -webkit-user-select: none;
   border-radius: 10px; transition: background 0.15s;
 }
-.index-bar.touching { background: rgba(120, 120, 128, 0.35); }
+.index-bar.touching { background: rgba(120, 120, 128, 0.22); }
 .index-bar span { width: 20px; text-align: center; border-radius: 50%; }
 .index-bar span.current { background: var(--accent); color: #fff; }
 
 .view.has-index .track-list, .view.has-index .playlist-list { padding-right: 30px; }
+
+/* ===== 白基調の仕上げ ===== */
+.topbar h1 { display: flex; align-items: baseline; white-space: nowrap; }
+.app-version { font-size: 11px; margin-left: 6px; }
+.topbar-actions .icon-btn { padding: 6px 7px; display: flex; align-items: center; }
+.tab-icon { display: flex; }
+.np-open .mini-player, .np-open .tabbar { display: none; }
+.np-open #view-nowplaying { padding-bottom: calc(24px + var(--safe-bottom)); }
+.view.has-index .search-bar, .view.has-index .play-row, .view.has-index .import-progress { margin-right: 26px; }
+.view.has-index .search-bar, .view.has-index .play-row { padding-right: 16px; }

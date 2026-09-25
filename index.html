@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Myミュージック">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#000000">
+<meta name="theme-color" content="#ffffff">
 <title>Myミュージック</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -96,17 +96,20 @@
   <!-- ===== 再生中(Now Playing)画面 ===== -->
   <section id="view-nowplaying" class="view">
     <header class="topbar nowplaying-topbar">
-      <button id="btn-collapse-nowplaying" class="icon-btn">︿</button>
+      <button id="btn-collapse-nowplaying" class="icon-btn" title="閉じる">︿</button>
       <span class="np-from" id="np-from">再生中</span>
-      <button id="btn-lyrics-toggle" class="icon-btn" title="歌詞">Aa</button>
+      <span class="np-topbar-spacer"></span>
     </header>
     <div class="np-artwork-wrap">
       <img id="np-artwork" class="np-artwork" src="" alt="">
       <div id="np-lyrics" class="np-lyrics hidden"></div>
     </div>
     <div class="np-meta">
-      <div id="np-title" class="np-title">曲名</div>
-      <div id="np-artist" class="np-artist">アーティスト</div>
+      <div class="np-meta-text">
+        <div id="np-title" class="np-title">曲名</div>
+        <div id="np-artist" class="np-artist">アーティスト</div>
+      </div>
+      <button id="btn-np-more" class="icon-btn np-more" title="メニュー">⋯</button>
     </div>
     <div class="np-seek">
       <input id="seek-bar" type="range" min="0" max="1000" value="0">
@@ -116,11 +119,14 @@
       </div>
     </div>
     <div class="np-controls">
-      <button id="btn-shuffle" class="ctrl-btn small" title="シャッフル">🔀</button>
-      <button id="btn-prev" class="ctrl-btn" title="前へ">⏮</button>
-      <button id="btn-playpause" class="ctrl-btn large" title="再生/一時停止">▶️</button>
-      <button id="btn-next" class="ctrl-btn" title="次へ">⏭</button>
-      <button id="btn-repeat" class="ctrl-btn small" title="リピート">🔁</button>
+      <button id="btn-prev" class="ctrl-btn" title="前へ"></button>
+      <button id="btn-playpause" class="ctrl-btn large" title="再生/一時停止"></button>
+      <button id="btn-next" class="ctrl-btn" title="次へ"></button>
+    </div>
+    <div class="np-bottom">
+      <button id="btn-shuffle" class="ctrl-btn small" title="シャッフル"></button>
+      <button id="btn-lyrics-toggle" class="ctrl-btn small" title="歌詞"></button>
+      <button id="btn-repeat" class="ctrl-btn small" title="リピート"></button>
     </div>
   </section>
 
@@ -131,8 +137,8 @@
       <div id="mini-title" class="mini-title">曲名</div>
       <div id="mini-artist" class="mini-artist">アーティスト</div>
     </div>
-    <button id="mini-playpause" class="icon-btn" title="再生/一時停止">▶️</button>
-    <button id="mini-next" class="icon-btn" title="次へ">⏭</button>
+    <button id="mini-playpause" class="icon-btn" title="再生/一時停止"></button>
+    <button id="mini-next" class="icon-btn" title="次へ"></button>
   </div>
 
   <!-- ===== タブバー ===== -->
