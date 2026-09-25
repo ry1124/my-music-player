@@ -23,6 +23,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   playlists = await DB.getAllPlaylists();
   renderTrackList();
   renderPlaylistList();
+  setupIndexBar();
+  showView('view-library'); // 起動直後の画面でもインデックスバーの表示状態を反映
   bindUIEvents();
   bindAudioEvents();
 });
@@ -37,6 +39,9 @@ function registerServiceWorker() {
 function showView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(id).classList.add('active');
+  indexListId = INDEX_VIEWS[id] || null;
+  document.getElementById('index-bar').classList.toggle('hidden', !indexListId);
+  document.getElementById(id).classList.toggle('has-index', !!indexListId);
 }
 
 function bindUIEvents() {
@@ -171,6 +176,20 @@ function extractGenre(tags) {
 
 const UNKNOWN_ARTIST = '不明なアーティスト';
 
+// 並び替え用の読み(ID3の TSOT/TSOP/TSOA。ID3v2.2の曲では TST/TSP/TSA)。無ければ空文字
+function extractSortName(tags, ...frameIds) {
+  if (!tags) return '';
+  for (const id of frameIds) {
+    const f = tags[id];
+    const v = f && (typeof f === 'string' ? f : f.data);
+    if (v && String(v).trim()) return String(v).replace(/\u0000/g, '').trim();
+  }
+  return '';
+}
+
+// 曲の並び替え・インデックス用のキー: 読みがあれば読み、無ければ曲名そのもの
+const trackSortKey = (t) => t.titleSort || t.title;
+
 // タグに情報が無い場合の保険: ファイル名「アーティスト - 曲名」から推定する
 function parseFileName(fileName) {
   const base = fileName.replace(/\.[^/.]+$/, '');
@@ -192,6 +211,10 @@ async function importOneFile(file, sourceKey, orderHint) {
     album: (tags.album && tags.album.trim()) || '',
     year: extractYear(tags),
     genre: extractGenre(tags),
+    titleSort: extractSortName(tags, 'TSOT', 'TST'),
+    artistSort: extractSortName(tags, 'TSOP', 'TSP'),
+    albumSort: extractSortName(tags, 'TSOA', 'TSA'),
+    readingsScanned: true,
     duration,
     fileBlob: file,
     mimeType: file.type || 'audio/mpeg',
@@ -456,9 +479,9 @@ let isRescanningTags = false;
 
 async function rescanYearGenreTags() {
   if (isRescanningTags) { alert('すでに実行中です'); return; }
-  const targets = tracks.filter(t => !t.year || !t.genre || t.artist === UNKNOWN_ARTIST);
+  const targets = tracks.filter(t => !t.readingsScanned || !t.year || !t.genre || t.artist === UNKNOWN_ARTIST);
   if (targets.length === 0) { alert('すべての曲にタグ情報があります(または元々タグが無く再取得できません)'); return; }
-  if (!confirm(`${targets.length}曲のアーティスト・年代・ジャンル情報を再スキャンします。曲数によっては数分かかることがあります。始めますか?`)) return;
+  if (!confirm(`${targets.length}曲のアーティスト・年代・ジャンル・読み(並び替え用)を再スキャンします。曲数によっては数分かかることがあります。始めますか?`)) return;
 
   isRescanningTags = true;
   const progressEl = document.getElementById('import-progress');
@@ -474,6 +497,13 @@ async function rescanYearGenreTags() {
         const year = extractYear(tags);
         const genre = extractGenre(tags);
         let changed = false;
+        if (!track.readingsScanned) {
+          track.titleSort = extractSortName(tags, 'TSOT', 'TST');
+          track.artistSort = extractSortName(tags, 'TSOP', 'TSP');
+          track.albumSort = extractSortName(tags, 'TSOA', 'TSA');
+          track.readingsScanned = true;
+          changed = true;
+        }
         if (year && !track.year) { track.year = year; changed = true; }
         if (genre && !track.genre) { track.genre = genre; changed = true; }
         if (track.artist === UNKNOWN_ARTIST) {
@@ -497,7 +527,7 @@ async function rescanYearGenreTags() {
 
   isRescanningTags = false;
   progressEl.classList.add('hidden');
-  alert(`再スキャン完了: ${updated}/${targets.length}曲に年代・ジャンル情報を補完しました`);
+  alert(`再スキャン完了: ${updated}/${targets.length}曲曲のタグ情報(年代・ジャンル・読みなど)を更新しました`);
 }
 
 // ===== 年代別・ジャンル別グルーピング =====
@@ -528,7 +558,7 @@ function defaultLabelSort(a, b) {
   return a.localeCompare(b, 'ja');
 }
 
-function renderGroupList(listElId, groupFn, sortFn) {
+function renderGroupList(listElId, groupFn, sortFn, keyFn) {
   const listEl = document.getElementById(listElId);
   listEl.innerHTML = '';
   const groups = new Map(); // label -> track[]
@@ -542,6 +572,7 @@ function renderGroupList(listElId, groupFn, sortFn) {
     const groupTracks = groups.get(label);
     const li = document.createElement('li');
     li.className = 'playlist-item';
+    li.dataset.section = sectionOf(keyFn ? keyFn(label) : label);
     const img = document.createElement('img');
     img.className = 'playlist-artwork';
     img.src = getArtworkUrl(groupTracks[0]);
@@ -569,7 +600,20 @@ function renderGenreList() { renderGroupList('genre-list', genreLabel); }
 function artistLabel(track) {
   return track.artist && track.artist.trim() && track.artist !== UNKNOWN_ARTIST ? track.artist.trim() : '不明';
 }
-function renderArtistList() { renderGroupList('artist-list', artistLabel); }
+function renderArtistList() {
+  // アーティストの読み(TSOP)があれば、それで並べる。無ければ表記そのまま
+  const reading = new Map();
+  tracks.forEach((t) => {
+    const l = artistLabel(t);
+    if (t.artistSort && !reading.has(l)) reading.set(l, t.artistSort);
+  });
+  const keyOf = (l) => reading.get(l) || l;
+  renderGroupList('artist-list', artistLabel, (a, b) => {
+    if (a === '不明') return 1;
+    if (b === '不明') return -1;
+    return sectionSort(keyOf(a), keyOf(b));
+  }, keyOf);
+}
 
 function openGroupDetail(label, groupTracks, backView) {
   lastGroupListView = backView;
@@ -772,7 +816,7 @@ function renderTrackList(filter = '') {
   const f = filter.toLowerCase();
   const filtered = tracks
     .filter(t => !f || t.title.toLowerCase().includes(f) || t.artist.toLowerCase().includes(f))
-    .sort((a, b) => b.addedAt - a.addedAt);
+    .sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
 
   emptyHint.classList.toggle('hidden', tracks.length > 0);
 
@@ -780,6 +824,63 @@ function renderTrackList(filter = '') {
   filtered.forEach(track => {
     listEl.appendChild(buildTrackItem(track, filtered.map(t => t.id)));
   });
+}
+
+// ===== 右端のインデックスバー(あ〜わ / A〜Z / #) =====
+const INDEX_LABELS = [...'あかさたなはまやらわ', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'];
+const INDEX_VIEWS = { 'view-library': 'track-list', 'view-artists': 'artist-list' }; // バーを出す画面 → 対象の一覧
+const KANA_ROWS = {
+  'あ': 'ぁあぃいぅうぇえぉおゔ', 'か': 'かきくけこゕゖ', 'さ': 'さしすせそ', 'た': 'たちつってとっ', 'な': 'なにぬねの',
+  'は': 'はひふへほ', 'ま': 'まみむめも', 'や': 'ゃやゅゆょよ', 'ら': 'らりるれろ', 'わ': 'ゎわゐゑをん',
+};
+
+// 先頭文字の所属: ひらがな/カタカナ→行の代表(濁音・半濁音・小書きも同じ行)、英字→A〜Z、それ以外(漢字・数字・記号)→#
+function sectionOf(str) {
+  const c = (str || '').normalize('NFKC').trim().charAt(0);
+  if (!c) return '#';
+  const h = c.replace(/[ァ-ヶ]/, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+  if (/[A-Za-z]/.test(h)) return h.toUpperCase();
+  const base = h.normalize('NFD').charAt(0); // 濁点・半濁点を分離して清音にする
+  for (const [row, chars] of Object.entries(KANA_ROWS)) if (chars.includes(base)) return row;
+  return '#';
+}
+
+function sectionSort(a, b) {
+  const d = INDEX_LABELS.indexOf(sectionOf(a)) - INDEX_LABELS.indexOf(sectionOf(b));
+  return d !== 0 ? d : a.localeCompare(b, 'ja');
+}
+
+let indexListId = null;
+
+function jumpToSection(label) {
+  if (!indexListId) return;
+  const target = INDEX_LABELS.indexOf(label);
+  const items = document.querySelectorAll(`#${indexListId} [data-section]`);
+  // その頭文字の曲が無ければ、次に近い頭文字へ(Apple Musicと同じ)
+  const hit = [...items].find(el => INDEX_LABELS.indexOf(el.dataset.section) >= target);
+  const view = document.querySelector('.view.active');
+  if (!hit || !view) return;
+  const topbar = view.querySelector('.topbar');
+  const offset = topbar ? topbar.offsetHeight : 0;
+  view.scrollTop += hit.getBoundingClientRect().top - view.getBoundingClientRect().top - offset;
+}
+
+function setupIndexBar() {
+  const bar = document.getElementById('index-bar');
+  INDEX_LABELS.forEach((l) => {
+    const span = document.createElement('span');
+    span.textContent = l;
+    bar.appendChild(span);
+  });
+  const labelAt = (clientY) => {
+    const r = bar.getBoundingClientRect();
+    const i = Math.min(INDEX_LABELS.length - 1, Math.max(0, Math.floor(((clientY - r.top) / r.height) * INDEX_LABELS.length)));
+    return INDEX_LABELS[i];
+  };
+  const onTouch = (e) => { e.preventDefault(); jumpToSection(labelAt(e.touches[0].clientY)); };
+  bar.addEventListener('touchstart', onTouch, { passive: false });
+  bar.addEventListener('touchmove', onTouch, { passive: false });
+  bar.addEventListener('click', (e) => jumpToSection(labelAt(e.clientY))); // PCブラウザ用
 }
 
 // ===== 一覧の先頭に置く「再生 / シャッフル」ボタン(Apple Musicと同様) =====
@@ -814,6 +915,7 @@ function buildTrackItem(track, queueIds) {
   const li = document.createElement('li');
   li.className = 'track-item' + (currentTrack && currentTrack.id === track.id ? ' playing' : '');
   li.dataset.trackId = track.id;
+  li.dataset.section = sectionOf(trackSortKey(track));
 
   const img = document.createElement('img');
   img.className = 'track-artwork';
