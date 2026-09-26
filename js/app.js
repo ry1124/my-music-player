@@ -662,6 +662,23 @@ function yearSortFn(a, b) {
   return yearSortOrder === 'desc' ? yb - ya : ya - yb;
 }
 
+// 特撮ジャンルの曲を、シリーズ(ウルトラマン / 仮面ライダー)にまとめる。アルバム名・曲名・アーティスト名に「ウルトラ」/「仮面」「ライダー」が含まれるかで判定する
+const TOKUSATSU_GENRE_RE = /^(特撮|とくさつ|tokusatsu)$/;
+const TOKUSATSU_SERIES = [
+  { label: 'ウルトラマン', re: /ウルトラ/ },
+  { label: '仮面ライダー', re: /仮面|ライダー/ },
+];
+function isTokusatsu(track) {
+  return TOKUSATSU_GENRE_RE.test((track.genre || '').normalize('NFKC').trim().toLowerCase());
+}
+// 特撮の曲ならシリーズ名、それ以外や判別できない曲は '' を返す
+function tokusatsuSeries(track) {
+  if (!isTokusatsu(track)) return '';
+  const text = `${track.album || ''} ${track.title || ''} ${track.artist || ''}`.normalize('NFKC');
+  const hit = TOKUSATSU_SERIES.find(d => d.re.test(text));
+  return hit ? hit.label : '';
+}
+
 function genreLabel(track) {
   return track.genre && track.genre.trim() ? track.genre.trim() : '不明';
 }
@@ -823,8 +840,17 @@ function renderGenreAlbumList(genre, groupTracks) {
     section: sectionOf(keyOf(name)),
     onClick,
   });
+  // 特撮ジャンルなら、アルバム一覧の前に「ウルトラマン」「仮面ライダー」の行を出す
+  const seriesRows = [];
+  if (groupTracks.some(isTokusatsu)) {
+    TOKUSATSU_SERIES.forEach((d) => {
+      const list = groupTracks.filter(t => tokusatsuSeries(t) === d.label);
+      if (list.length > 0) seriesRows.push(toRow(d.label, list, () => openGenreAlbumTracks(d.label, list)));
+    });
+  }
   fillGroupRows(listEl, [
     toRow('すべての曲', groupTracks, () => openGenreAlbumTracks('すべての曲', groupTracks)),
+    ...seriesRows,
     ...albums.map(a => toRow(a, groups.get(a), () => openGenreAlbumTracks(a, groups.get(a)))),
   ]);
 }
@@ -870,10 +896,12 @@ function renderGenreSubFilter(groupTracks) {
   const selOrigins = new Set(); // 選択中の上の段(key)
   const selGenres = new Set();  // 選択中の下の段(ジャンル名)
 
+  // 下の段のチップ名。特撮は「ウルトラマン」「仮面ライダー」に分け、判別できない曲は元のジャンル名(特撮)のまま
+  const chipGenre = (t) => tokusatsuSeries(t) || genreLabel(t);
   const noSelection = () => selOrigins.size === 0 && selGenres.size === 0;
   const isSelected = (t) => {
     const k = originKey(t);
-    return k ? selOrigins.has(k) : selGenres.has(genreLabel(t));
+    return k ? selOrigins.has(k) : selGenres.has(chipGenre(t));
   };
   // インデックスで飛べるように、曲名(読みがあれば読み)順に並べる
   const currentList = () => (noSelection() ? groupTracks : groupTracks.filter(isSelected))
@@ -899,13 +927,13 @@ function renderGenreSubFilter(groupTracks) {
 
     // 上の段(J-Pop/Anime/洋楽)にあるジャンルは、下の段では重複するので出さない
     filterEl.innerHTML = '';
-    const genres = [...new Set(groupTracks.filter(t => !originKey(t)).map(t => genreLabel(t)))].sort((a, b) => {
+    const genres = [...new Set(groupTracks.filter(t => !originKey(t)).map(t => chipGenre(t)))].sort((a, b) => {
       if (a === '不明') return 1;
       if (b === '不明') return -1;
       return a.localeCompare(b, 'ja');
     });
     genres.forEach((g) => {
-      const n = groupTracks.filter(t => !originKey(t) && genreLabel(t) === g).length;
+      const n = groupTracks.filter(t => !originKey(t) && chipGenre(t) === g).length;
       filterEl.appendChild(makeChip(`${g} (${n})`, selGenres.has(g), () => { toggle(selGenres, g); render(); }));
     });
     filterEl.classList.toggle('hidden', genres.length === 0);
