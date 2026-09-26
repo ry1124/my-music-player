@@ -362,7 +362,7 @@ html, body {
 .lyric-offset-label { color: var(--text-dim); }
 
 .drag-handle { font-size: 26px; color: var(--text-dim); padding: 8px 6px 8px 16px; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
-.playlist-item.dragging { position: relative; z-index: 5; background: var(--surface2); box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.playlist-item.dragging, .edit-row.dragging { position: relative; z-index: 5; background: var(--surface2); box-shadow: 0 4px 14px rgba(0,0,0,.18); }
 
 /* お気に入り(★) */
 .np-fav { display: flex; align-items: center; color: var(--text-dim); padding: 6px 8px; }
@@ -377,3 +377,6 @@ html, body {
 .add-mode-bar { display: block; margin: 0 16px 6px; padding: 8px 12px; border: 0; border-radius: 10px; background: var(--surface2); color: var(--accent); font-size: 14px; font-weight: 600; text-align: left; width: calc(100% - 32px); }
 .add-mode-bar.active { background: var(--accent); color: #fff; text-align: center; }
 .view.has-index .add-mode-bar { margin-right: 42px; width: calc(100% - 58px); }
+
+/* プレイリスト内の曲の並べ替え中の行 */
+.edit-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); height: 63px; box-sizing: border-box; }

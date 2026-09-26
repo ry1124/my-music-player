@@ -201,6 +201,20 @@ function bindUIEvents() {
   });
   document.getElementById('btn-back-playlists').addEventListener('click', () => showView('view-playlists'));
   document.getElementById('btn-playlist-add').addEventListener('click', openAddSongs);
+  document.getElementById('btn-playlist-reorder').addEventListener('click', toggleSongEditMode);
+  document.getElementById('playlist-detail-list').addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('.drag-handle');
+    const li = handle && handle.closest('.edit-row');
+    if (!li) return;
+    startRowDrag({ preventDefault: () => e.preventDefault(), currentTarget: handle, pointerId: e.pointerId, clientY: e.clientY }, li, li.parentElement, async (rows) => {
+      const pl = playlists.find(p => p.id === currentPlaylistId);
+      if (!pl) return;
+      const shown = rows.map(r => Number(r.dataset.trackId));
+      const missing = pl.trackIds.filter(id => !shown.includes(id)); // 一覧に出なかった曲(削除済み等)は末尾に残す
+      pl.trackIds = [...shown, ...missing];
+      await DB.updatePlaylist(pl);
+    });
+  });
   document.getElementById('add-mode-bar').addEventListener('click', toggleLibraryAddMode);
   document.getElementById('btn-add-songs-done').addEventListener('click', closeAddSongs);
   let addSongsTimer = null;
@@ -1069,7 +1083,7 @@ function renderTrackList(filter = '') {
 
 // ===== 右端のインデックスバー(あ〜わ / A〜Z / #) =====
 const INDEX_LABELS = [...'あかさたなはまやらわ', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'];
-const INDEX_VIEWS = { 'view-library': 'track-list', 'view-artists': 'artist-list' }; // バーを出す画面 → 対象の一覧
+const INDEX_VIEWS = { 'view-library': 'track-list', 'view-artists': 'artist-list', 'view-add-songs': 'add-songs-list' }; // バーを出す画面 → 対象の一覧
 const KANA_ROWS = {
   'あ': 'ぁあぃいぅうぇえぉおゔ', 'か': 'かきくけこゕゖ', 'さ': 'さしすせそ', 'た': 'たちつってとっ', 'な': 'なにぬねの',
   'は': 'はひふへほ', 'ま': 'まみむめも', 'や': 'ゃやゅゆょよ', 'ら': 'らりるれろ', 'わ': 'ゎわゐゑをん',
@@ -1117,7 +1131,7 @@ function jumpToSection(label) {
   if (listEl._v) { // 曲一覧(仮想スクロール): 配列から位置を計算して、そこへスクロールする
     const idx = listEl._v.list.findIndex(t => SECTION_INDEX.get(sectionOf(trackSortKey(t))) >= target);
     if (idx < 0) return;
-    view.scrollTop = listTop() + PLAY_H + idx * ROW_H - offset;
+    view.scrollTop = listTop() + headHeight(listEl) + idx * ROW_H - offset;
     updateVirtualWindow(listEl, true);
     return;
   }
@@ -1238,13 +1252,16 @@ const ROW_H = 63;     // 曲の行の高さ(CSSの .track-item と一致させ�
 const PLAY_H = 64;    // 先頭の「再生/シャッフル」行の高さ(CSSの .play-row と一致させる)
 const V_BUFFER = 30;  // 見えている範囲の上下に、余分に描画しておく行数(速いスクロールで空白が出ないように)
 
+// 一覧の先頭にある「再生/シャッフル」行の高さ(曲を追加する画面のように、無い一覧は0)
+const headHeight = (listEl) => (listEl.querySelector(':scope > .play-row') ? PLAY_H : 0);
+
 function updateVirtualWindow(listEl, force) {
   const v = listEl._v;
   if (!v || listEl.getClientRects().length === 0) return; // 表示されていない一覧は更新しない
   const view = listEl.closest('.view');
   if (!view) return;
   const listTop = listEl.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop;
-  const first = Math.floor((view.scrollTop - listTop - PLAY_H) / ROW_H);
+  const first = Math.floor((view.scrollTop - listTop - headHeight(listEl)) / ROW_H);
   const visible = Math.ceil(view.clientHeight / ROW_H);
   const n = v.list.length;
   const needStart = Math.max(0, first);
@@ -1530,7 +1547,10 @@ function renderPlaylistList() {
       const handle = document.createElement('div');
       handle.className = 'drag-handle';
       handle.textContent = '≡';
-      handle.addEventListener('pointerdown', (e) => startPlaylistDrag(e, li, listEl));
+      handle.addEventListener('pointerdown', (e) => startRowDrag(e, li, listEl, (rows) => {
+        const keys = rows.map(el => el.dataset.key);
+        try { localStorage.setItem(PLAYLIST_ORDER_KEY, JSON.stringify(keys)); } catch (err) { /* 保存できなくても、この画面では並んだまま */ }
+      }));
       li.appendChild(handle);
     } else {
       li.addEventListener('click', open);
@@ -1547,37 +1567,73 @@ function renderPlaylistList() {
   });
 }
 
-// 右端の「≡」をつかんで上下にドラッグ → 指を離した位置に並べ替える
-function startPlaylistDrag(e, li, listEl) {
+// 右端の「≡」をつかんで上下にドラッグ → 指を離した位置に並べ替える。画面の上下の端に近づくと、自動でスクロールする
+// 離したとき、onDone(並んだ行の一覧) を呼ぶ
+function startRowDrag(e, li, listEl, onDone) {
   e.preventDefault();
   const handle = e.currentTarget;
   handle.setPointerCapture(e.pointerId);
-  let startY = e.clientY;
+  const view = listEl.closest('.view');
+  let clientY = e.clientY;
+  let startDoc = e.clientY + view.scrollTop; // 画面のスクロールを含めた、つかんだ位置
+  let raf = null;
   li.classList.add('dragging');
-  const move = (ev) => {
-    let dy = ev.clientY - startY;
+  const update = () => {
+    let dy = clientY + view.scrollTop - startDoc;
     // 上や下の行の中心を越えたら入れ替える(入れ替えた分、基準の位置をずらす)
     for (;;) {
       const prev = li.previousElementSibling;
       const next = li.nextElementSibling;
-      if (prev && dy < -prev.offsetHeight / 2) { listEl.insertBefore(prev, li.nextSibling); startY -= prev.offsetHeight; dy += prev.offsetHeight; }
-      else if (next && dy > next.offsetHeight / 2) { listEl.insertBefore(next, li); startY += next.offsetHeight; dy -= next.offsetHeight; }
+      if (prev && dy < -prev.offsetHeight / 2) { listEl.insertBefore(prev, li.nextSibling); startDoc -= prev.offsetHeight; dy += prev.offsetHeight; }
+      else if (next && dy > next.offsetHeight / 2) { listEl.insertBefore(next, li); startDoc += next.offsetHeight; dy -= next.offsetHeight; }
       else break;
     }
     li.style.transform = `translateY(${dy}px)`;
   };
+  const tick = () => {
+    const r = view.getBoundingClientRect();
+    const zone = 110;
+    let v = 0;
+    if (clientY < r.top + zone) v = -Math.min(14, (r.top + zone - clientY) / 6);
+    else if (clientY > r.bottom - zone) v = Math.min(14, (clientY - (r.bottom - zone)) / 6);
+    if (v) { view.scrollTop += v; update(); }
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+  const move = (ev) => { clientY = ev.clientY; update(); };
   const end = () => {
+    cancelAnimationFrame(raf);
     handle.removeEventListener('pointermove', move);
     handle.removeEventListener('pointerup', end);
     handle.removeEventListener('pointercancel', end);
     li.classList.remove('dragging');
     li.style.transform = '';
-    const keys = [...listEl.children].map(el => el.dataset.key);
-    try { localStorage.setItem(PLAYLIST_ORDER_KEY, JSON.stringify(keys)); } catch (err) { /* 保存できなくても、この画面では並んだまま */ }
+    onDone([...listEl.children]);
   };
   handle.addEventListener('pointermove', move);
   handle.addEventListener('pointerup', end);
   handle.addEventListener('pointercancel', end);
+}
+
+// プレイリストの中の曲の並べ替え: 「並び替え」を押すと全曲を普通の一覧で出し、「≡」で動かす
+let songEditMode = false;
+function renderSongEditList() {
+  const pl = playlists.find(p => p.id === currentPlaylistId);
+  if (!pl) return;
+  const listEl = document.getElementById('playlist-detail-list');
+  listEl._v = null;
+  listEl.innerHTML = pl.trackIds.map(id => tracks.find(t => t.id === id)).filter(Boolean).map(t =>
+    `<li class="edit-row" data-track-id="${t.id}"><img class="track-artwork" decoding="async" src="${getThumbUrl(t)}" alt="">` +
+    `<div class="track-meta"><div class="track-title">${esc(t.title)}</div><div class="track-artist">${esc(t.artist)}</div></div>` +
+    `<div class="drag-handle">≡</div></li>`).join('');
+}
+function toggleSongEditMode() {
+  const btn = document.getElementById('btn-playlist-reorder');
+  songEditMode = !songEditMode;
+  btn.textContent = songEditMode ? '完了' : '並び替え';
+  document.getElementById('btn-playlist-add').classList.toggle('hidden', songEditMode);
+  if (songEditMode) renderSongEditList();
+  else openPlaylistDetail(currentPlaylistId); // 通常の一覧(先頭の再生ボタン付き)に戻す
 }
 
 async function createPlaylistPrompt() {
@@ -1609,6 +1665,8 @@ function openPlaylistDetail(playlistId) {
   }
   document.getElementById('playlist-detail-title').textContent = pl.name;
   document.getElementById('btn-playlist-add').classList.toggle('hidden', typeof playlistId !== 'number'); // 曲を足せるのは自分のプレイリストだけ
+  document.getElementById('btn-playlist-reorder').classList.toggle('hidden', typeof playlistId !== 'number');
+  if (songEditMode) { songEditMode = false; document.getElementById('btn-playlist-reorder').textContent = '並び替え'; } // 別のプレイリストを開いたら、並び替えは終わり
   const listEl = document.getElementById('playlist-detail-list');
   fillTrackList(listEl, plTracks, plTracks.map(t => t.id));
   showView('view-playlist-detail');
