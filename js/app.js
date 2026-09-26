@@ -1329,7 +1329,12 @@ async function toggleFavorite(track) {
   track.favorite = !track.favorite;
   await DB.updateTrack(track);
   updateFavButton();
-  document.querySelectorAll('ul').forEach((ul) => { if (ul._v) updateVirtualWindow(ul, true); }); // 表示中の行の ★ を更新
+  // 全ての一覧(今は表示されていない画面も含む)の、この曲の行の ★ を直接付け外しする
+  document.querySelectorAll(`.track-item[data-track-id="${track.id}"]`).forEach((li) => {
+    const mark = li.querySelector('.fav-mark');
+    if (track.favorite && !mark) li.querySelector('.track-menu-btn').insertAdjacentHTML('beforebegin', '<span class="fav-mark">★</span>');
+    else if (!track.favorite && mark) mark.remove();
+  });
   renderPlaylistList();
   if (currentPlaylistId === 'fav' && document.getElementById('view-playlist-detail').classList.contains('active')) openPlaylistDetail('fav');
 }
