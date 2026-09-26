@@ -197,7 +197,13 @@ function bindUIEvents() {
     renderPlaylistList();
   });
   document.getElementById('btn-back-playlists').addEventListener('click', () => showView('view-playlists'));
-  document.getElementById('btn-delete-playlist').addEventListener('click', deleteCurrentPlaylist);
+  // 横にスワイプして出てくる「削除」ボタン: プレイリスト(春夏秋冬は対象外)と、プレイリスト内の曲
+  bindSwipeDelete(document.getElementById('playlist-list'), '.playlist-item',
+    li => !playlistEditMode && li.dataset.key.startsWith('pl:'),
+    li => deletePlaylistById(li.dataset.key.slice(3)));
+  bindSwipeDelete(document.getElementById('playlist-detail-list'), '.track-item',
+    () => typeof currentPlaylistId === 'number',
+    (li) => { const t = tracks.find(x => String(x.id) === li.dataset.trackId); if (t) removeTrackFromCurrentPlaylist(t.id); });
 
   // ミニプレイヤー
   document.getElementById('mini-player').addEventListener('click', (e) => {
@@ -1287,6 +1293,73 @@ function fillTrackList(listEl, list, ids) {
   });
 }
 
+// ===== 横スワイプで「削除」を出す(一覧の行を左へ動かす) =====
+// 行ごとにイベントを登録せず、一覧に1回だけ登録する。縦スクロールは邪魔しない(CSSの touch-action: pan-y)
+function bindSwipeDelete(listEl, rowSel, canSwipe, onDelete) {
+  const W = 88; // 「削除」ボタンの幅(CSSの .swipe-del と一致)
+  let open = null; // 削除ボタンが出ている行
+  let st = null;
+  let suppressClick = false;
+  const closeOpen = () => {
+    if (open) { open.classList.remove('swiped', 'swipe-active'); open.style.removeProperty('--sx'); }
+    open = null;
+  };
+  listEl.addEventListener('pointerdown', (e) => {
+    const li = e.target.closest(rowSel);
+    if (!li || !listEl.contains(li) || e.target.closest('.swipe-del') || !canSwipe(li)) return;
+    st = { li, x0: e.clientX, y0: e.clientY, base: li === open ? -W : 0, dragging: false, x: 0 };
+  });
+  listEl.addEventListener('pointermove', (e) => {
+    if (!st) return;
+    const dx = e.clientX - st.x0;
+    const dy = e.clientY - st.y0;
+    if (!st.dragging) {
+      if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      st.dragging = true;
+      if (open && open !== st.li) closeOpen();
+      if (!st.li.querySelector('.swipe-del')) {
+        const b = document.createElement('button');
+        b.className = 'swipe-del';
+        b.textContent = '削除';
+        st.li.appendChild(b);
+      }
+      st.li.classList.remove('swiped');
+      st.li.classList.add('swipe-active');
+      try { st.li.setPointerCapture(e.pointerId); } catch (err) { /* 無視 */ }
+    }
+    st.x = Math.max(-W - 30, Math.min(0, st.base + dx));
+    st.li.style.setProperty('--sx', `${st.x}px`);
+  });
+  const finish = () => {
+    if (!st) return;
+    const { li, dragging, x } = st;
+    st = null;
+    if (!dragging) return;
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 60); // 指を離した直後の click で、曲が再生されたり開いたりしないようにする
+    li.classList.remove('swipe-active');
+    li.style.removeProperty('--sx');
+    if (x < -W / 2) { li.classList.add('swiped'); open = li; }
+    else { li.classList.remove('swiped'); if (open === li) open = null; }
+  };
+  listEl.addEventListener('pointerup', finish);
+  listEl.addEventListener('pointercancel', finish);
+  // captureで先に受け取り、削除ボタンの処理と、開いている行を閉じるだけの処理をする(行本来のタップ処理には渡さない)
+  listEl.addEventListener('click', (e) => {
+    if (open && !open.isConnected) open = null;
+    if (suppressClick) { e.stopPropagation(); e.preventDefault(); return; }
+    const del = e.target.closest('.swipe-del');
+    if (del) {
+      e.stopPropagation();
+      const li = del.closest(rowSel);
+      closeOpen();
+      onDelete(li);
+      return;
+    }
+    if (open) { e.stopPropagation(); closeOpen(); }
+  }, true);
+}
+
 // ===== アクションシート(簡易メニュー) =====
 // 画面下からせり上がる選択メニュー。選んだ項目の番号を返す(キャンセルは -1)
 function showChoiceSheet(title, options) {
@@ -1408,79 +1481,108 @@ async function setTrackSeason(track) {
 }
 
 // ===== プレイリスト =====
+// 春夏秋冬とプレイリストを、まとめて好きな順に並べられる。順番(キーの配列)は端末に保存する
+const PLAYLIST_ORDER_KEY = 'playlistOrder';
+let playlistEditMode = false;
+
+function playlistItemKey(item) { return item.season ? 'season:' + item.season.key : 'pl:' + item.pl.id; }
+
+function orderedPlaylistItems() {
+  // 標準の並び: プレイリスト(作成が新しい順。旧版で並べ替えた順があればそれ) → 春夏秋冬
+  const defaults = [
+    ...playlists.slice().sort((a, b) => {
+      const oa = a.order === undefined ? Infinity : a.order;
+      const ob = b.order === undefined ? Infinity : b.order;
+      if (oa !== ob) return oa === Infinity ? 1 : ob === Infinity ? -1 : oa - ob;
+      return b.createdAt - a.createdAt;
+    }).map(pl => ({ pl })),
+    ...SEASONS.map(d => ({ season: d })),
+  ];
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(PLAYLIST_ORDER_KEY)) || []; } catch (e) { /* 保存できない環境では標準の並び */ }
+  const byKey = new Map(defaults.map(it => [playlistItemKey(it), it]));
+  const savedItems = [];
+  saved.forEach((k) => { if (byKey.has(k)) { savedItems.push(byKey.get(k)); byKey.delete(k); } });
+  // 並び替えた後に作ったプレイリストなど、順が決まっていないものは、いちばん上に出す
+  return [...defaults.filter(it => byKey.has(playlistItemKey(it))), ...savedItems];
+}
+
 function renderPlaylistList() {
   const listEl = document.getElementById('playlist-list');
   listEl.innerHTML = '';
-  SEASONS.forEach((d) => {
-    const list = tracks.filter(t => seasonOf(t) === d.key);
+  orderedPlaylistItems().forEach((item) => {
     const li = document.createElement('li');
     li.className = 'playlist-item';
+    li.dataset.key = playlistItemKey(item);
+    let list, name, countText, open;
+    if (item.season) {
+      list = tracks.filter(t => seasonOf(t) === item.season.key);
+      name = item.season.label;
+      countText = `${list.length}曲(自動)`;
+      open = () => openPlaylistDetail('season:' + item.season.key);
+    } else {
+      list = item.pl.trackIds.map(id => tracks.find(t => t.id === id)).filter(Boolean);
+      name = item.pl.name;
+      countText = `${item.pl.trackIds.length}曲`;
+      open = () => openPlaylistDetail(item.pl.id);
+    }
     const img = document.createElement('img');
     img.className = 'playlist-artwork';
     img.src = list.length ? getThumbUrl(list.find(t => t.artworkBlob) || list[0]) : 'icons/default-artwork.png';
     const meta = document.createElement('div');
     meta.className = 'track-meta';
-    meta.innerHTML = `<div class="playlist-name">${d.label}</div><div class="playlist-count">${list.length}曲(自動)</div>`;
-    li.append(img, meta);
-    li.addEventListener('click', () => openPlaylistDetail('season:' + d.key));
-    listEl.appendChild(li);
-  });
-  sortedPlaylists().forEach((pl, i, arr) => {
-    const li = document.createElement('li');
-    li.className = 'playlist-item';
-    const firstTrack = tracks.find(t => t.id === pl.trackIds[0]);
-    const img = document.createElement('img');
-    img.className = 'playlist-artwork';
-    img.src = firstTrack ? getThumbUrl(firstTrack) : 'icons/default-artwork.png';
-    const meta = document.createElement('div');
-    meta.className = 'track-meta';
     const nameEl = document.createElement('div');
     nameEl.className = 'playlist-name';
-    nameEl.textContent = pl.name;
+    nameEl.textContent = name;
     const countEl = document.createElement('div');
     countEl.className = 'playlist-count';
-    countEl.textContent = `${pl.trackIds.length}曲`;
-    meta.appendChild(nameEl);
-    meta.appendChild(countEl);
-    li.appendChild(img);
-    li.appendChild(meta);
+    countEl.textContent = countText;
+    meta.append(nameEl, countEl);
+    li.append(img, meta);
     if (playlistEditMode) {
-      // 並び替え中: 右端の ▲ ▼ で1つずつ上下に動かす(タップしても開かない)
-      const mkBtn = (text, dir, disabled) => {
-        const b = document.createElement('button');
-        b.className = 'icon-btn reorder-btn';
-        b.textContent = text;
-        b.disabled = disabled;
-        b.addEventListener('click', (e) => { e.stopPropagation(); movePlaylist(pl.id, dir); });
-        return b;
-      };
-      li.append(mkBtn('▲', -1, i === 0), mkBtn('▼', 1, i === arr.length - 1));
+      const handle = document.createElement('div');
+      handle.className = 'drag-handle';
+      handle.textContent = '≡';
+      handle.addEventListener('pointerdown', (e) => startPlaylistDrag(e, li, listEl));
+      li.appendChild(handle);
     } else {
-      li.addEventListener('click', () => openPlaylistDetail(pl.id));
+      li.addEventListener('click', open);
     }
     listEl.appendChild(li);
   });
 }
 
-// 自分で決めた順(order)を優先。まだ並び替えていないプレイリストは、作成が新しい順
-let playlistEditMode = false;
-function sortedPlaylists() {
-  return playlists.slice().sort((a, b) => {
-    const oa = a.order === undefined ? Infinity : a.order;
-    const ob = b.order === undefined ? Infinity : b.order;
-    if (oa !== ob) return oa === Infinity ? 1 : ob === Infinity ? -1 : oa - ob;
-    return b.createdAt - a.createdAt;
-  });
-}
-async function movePlaylist(id, dir) {
-  const list = sortedPlaylists();
-  const i = list.findIndex(p => p.id === id);
-  const j = i + dir;
-  if (i < 0 || j < 0 || j >= list.length) return;
-  [list[i], list[j]] = [list[j], list[i]];
-  list.forEach((p, k) => { p.order = k; });
-  renderPlaylistList();
-  for (const p of list) await DB.updatePlaylist(p);
+// 右端の「≡」をつかんで上下にドラッグ → 指を離した位置に並べ替える
+function startPlaylistDrag(e, li, listEl) {
+  e.preventDefault();
+  const handle = e.currentTarget;
+  handle.setPointerCapture(e.pointerId);
+  let startY = e.clientY;
+  li.classList.add('dragging');
+  const move = (ev) => {
+    let dy = ev.clientY - startY;
+    // 上や下の行の中心を越えたら入れ替える(入れ替えた分、基準の位置をずらす)
+    for (;;) {
+      const prev = li.previousElementSibling;
+      const next = li.nextElementSibling;
+      if (prev && dy < -prev.offsetHeight / 2) { listEl.insertBefore(prev, li.nextSibling); startY -= prev.offsetHeight; dy += prev.offsetHeight; }
+      else if (next && dy > next.offsetHeight / 2) { listEl.insertBefore(next, li); startY += next.offsetHeight; dy -= next.offsetHeight; }
+      else break;
+    }
+    li.style.transform = `translateY(${dy}px)`;
+  };
+  const end = () => {
+    handle.removeEventListener('pointermove', move);
+    handle.removeEventListener('pointerup', end);
+    handle.removeEventListener('pointercancel', end);
+    li.classList.remove('dragging');
+    li.style.transform = '';
+    const keys = [...listEl.children].map(el => el.dataset.key);
+    try { localStorage.setItem(PLAYLIST_ORDER_KEY, JSON.stringify(keys)); } catch (err) { /* 保存できなくても、この画面では並んだまま */ }
+  };
+  handle.addEventListener('pointermove', move);
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
 }
 
 async function createPlaylistPrompt() {
@@ -1496,7 +1598,6 @@ async function createPlaylistPrompt() {
 function openPlaylistDetail(playlistId) {
   currentPlaylistId = playlistId;
   const isSeason = typeof playlistId === 'string';
-  document.getElementById('btn-delete-playlist').classList.toggle('hidden', isSeason);
   let pl;
   let plTracks;
   if (isSeason) {
@@ -1514,14 +1615,13 @@ function openPlaylistDetail(playlistId) {
   showView('view-playlist-detail');
 }
 
-async function deleteCurrentPlaylist() {
-  if (currentPlaylistId === null || typeof currentPlaylistId === 'string') return;
-  if (!confirm('このプレイリストを削除しますか? (曲自体はライブラリに残ります)')) return;
-  await DB.deletePlaylist(currentPlaylistId);
-  playlists = playlists.filter(p => p.id !== currentPlaylistId);
-  currentPlaylistId = null;
+// スワイプの「削除」ボタンから。曲そのものはライブラリに残る
+async function deletePlaylistById(idText) {
+  const pl = playlists.find(p => String(p.id) === String(idText));
+  if (!pl) return;
+  await DB.deletePlaylist(pl.id);
+  playlists = playlists.filter(p => p !== pl);
   renderPlaylistList();
-  showView('view-playlists');
 }
 
 async function addTrackToPlaylistPrompt(trackId) {
