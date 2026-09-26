@@ -86,14 +86,29 @@ function registerServiceWorker() {
 }
 
 // ===== タブ切り替え =====
+let viewBeforeNowPlaying = 'view-library';
 function showView(id) {
+  const prev = document.querySelector('.view.active');
+  if (id === 'view-nowplaying' && prev && prev.id !== 'view-nowplaying') viewBeforeNowPlaying = prev.id; // 閉じたときに戻る画面
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(id).classList.add('active');
-  indexListId = INDEX_VIEWS[id] || null;
-  if (id === 'view-group-detail' && (lastGroupListView === 'view-genres' || lastGroupListView === 'view-years')) indexListId = 'group-detail-list'; // ジャンル・年代の中(アルバム一覧・曲)
-  document.getElementById('index-bar').classList.toggle('hidden', !indexListId);
-  document.getElementById(id).classList.toggle('has-index', !!indexListId);
   document.body.classList.toggle('np-open', id === 'view-nowplaying'); // 再生画面ではミニプレイヤー/タブバーを隠す
+  refreshIndexTarget();
+  document.getElementById(id).querySelectorAll('ul').forEach(ul => { if (ul._v) updateVirtualWindow(ul, false); });
+}
+
+// 右端のインデックスバーを出すか・どの一覧を対象にするかを、今の画面の状態から決める
+function refreshIndexTarget() {
+  const active = document.querySelector('.view.active');
+  if (!active) return;
+  let listId = INDEX_VIEWS[active.id] || null;
+  if (active.id === 'view-group-detail' && (lastGroupListView === 'view-genres' || lastGroupListView === 'view-years')) {
+    // ジャンルの中でアルバム一覧を表示しているときは、アルバム一覧が対象
+    listId = (lastGroupListView === 'view-genres' && genreCtx && genreCtx.album === null) ? 'group-albums-list' : 'group-detail-list';
+  }
+  indexListId = listId;
+  document.getElementById('index-bar').classList.toggle('hidden', !listId);
+  active.classList.toggle('has-index', !!listId);
 }
 
 function bindUIEvents() {
@@ -159,7 +174,9 @@ function bindUIEvents() {
   document.getElementById('btn-back-group').addEventListener('click', () => {
     // ジャンルの曲一覧から戻るときは、まずアルバム一覧へ戻る
     if (lastGroupListView === 'view-genres' && genreCtx && genreCtx.album !== null) {
-      renderGenreAlbumList(genreCtx.genre, genreCtx.tracks);
+      genreCtx.album = null;
+      document.getElementById('group-detail-title').textContent = genreCtx.genre;
+      setGroupMode('albums'); // 作り直さず、保持しているアルバム一覧を再表示するだけ
       return;
     }
     showView(lastGroupListView);
@@ -186,9 +203,7 @@ function bindUIEvents() {
 
   // Now Playing
   document.getElementById('btn-collapse-nowplaying').addEventListener('click', () => {
-    const tab = document.querySelector('.tab-btn.active').dataset.tab;
-    const map = { library: 'view-library', years: 'view-years', genres: 'view-genres', artists: 'view-artists', playlists: 'view-playlists' };
-    showView(map[tab] || 'view-library');
+    showView(viewBeforeNowPlaying || 'view-library'); // 再生画面を開く前にいた画面へ戻る
   });
   document.getElementById('btn-playpause').addEventListener('click', togglePlayPause);
   document.getElementById('btn-prev').addEventListener('click', playPrev);
@@ -737,7 +752,15 @@ function openGroupDetail(label, groupTracks, backView) {
   showView('view-group-detail');
 }
 
+// 詳細画面には、アルバム一覧と曲一覧の2つの領域があり、どちらか一方だけを表示する
+function setGroupMode(mode) {
+  document.getElementById('group-albums-list').classList.toggle('hidden', mode !== 'albums');
+  document.getElementById('group-detail-list').classList.toggle('hidden', mode !== 'tracks');
+  refreshIndexTarget();
+}
+
 function renderGroupDetailList(list) {
+  setGroupMode('tracks');
   const listEl = document.getElementById('group-detail-list');
   fillTrackList(listEl, list, list.map(t => t.id));
 }
@@ -752,7 +775,8 @@ function albumLabel(track) {
 function renderGenreAlbumList(genre, groupTracks) {
   genreCtx = { genre, tracks: groupTracks, album: null };
   document.getElementById('group-detail-title').textContent = genre;
-  const listEl = document.getElementById('group-detail-list');
+  setGroupMode('albums');
+  const listEl = document.getElementById('group-albums-list');
   const groups = new Map();
   groupTracks.forEach((t) => {
     const a = albumLabel(t);
@@ -1010,15 +1034,21 @@ function jumpToSection(label) {
   if (!indexListId) return;
   const target = INDEX_LABELS.indexOf(label);
   const listEl = document.getElementById(indexListId);
-  if (listEl && listEl._flushRows) listEl._flushRows(); // 未表示の行が残っていれば、先に全部追加する
-  const items = document.querySelectorAll(`#${indexListId} [data-section]`);
-  // その頭文字の曲が無ければ、次に近い頭文字へ(Apple Musicと同じ)
-  const hit = [...items].find(el => INDEX_LABELS.indexOf(el.dataset.section) >= target);
   const view = document.querySelector('.view.active');
-  if (!hit || !view) return;
+  if (!listEl || !view) return;
   const topbar = view.querySelector('.topbar');
   const offset = topbar ? topbar.offsetHeight : 0;
-  view.scrollTop += hit.getBoundingClientRect().top - view.getBoundingClientRect().top - offset;
+  const listTop = () => listEl.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop;
+  // その頭文字の曲が無ければ、次に近い頭文字へ(Apple Musicと同じ)
+  if (listEl._v) { // 曲一覧(仮想スクロール): 配列から位置を計算して、そこへスクロールする
+    const idx = listEl._v.list.findIndex(t => SECTION_INDEX.get(sectionOf(trackSortKey(t))) >= target);
+    if (idx < 0) return;
+    view.scrollTop = listTop() + PLAY_H + idx * ROW_H - offset;
+    updateVirtualWindow(listEl, true);
+    return;
+  }
+  const hit = [...listEl.querySelectorAll('[data-section]')].find(el => SECTION_INDEX.get(el.dataset.section) >= target);
+  if (hit) view.scrollTop += hit.getBoundingClientRect().top - view.getBoundingClientRect().top - offset;
 }
 
 // 触覚フィードバック(文字が切り替わるたびの「コツッ」)。iPhoneのSafariにはVibration APIが無いため、
@@ -1129,33 +1159,63 @@ function trackItemHTML(track) {
 }
 
 // 行を段階的に挿入する。最初の一部だけ先に表示して、残りは少しずつ追加する(数千曲でも画面が固まらない)
-const FIRST_BATCH = 60;
-const NEXT_BATCH = 100;
-function renderRowsProgressively(listEl, list) {
-  clearTimeout(listEl._renderTimer);
-  let i = 0;
-  const step = (n) => {
-    listEl.insertAdjacentHTML('beforeend', list.slice(i, i + n).map(trackItemHTML).join(''));
-    i += n;
-  };
-  const finish = () => { clearTimeout(listEl._renderTimer); while (i < list.length) step(NEXT_BATCH); listEl._flushRows = null; };
-  step(FIRST_BATCH);
-  if (i >= list.length) { listEl._flushRows = null; return; }
-  listEl._flushRows = finish; // インデックスで未表示の位置へ飛ぶときに、残りを一気に追加するため
-  const tick = () => {
-    if (i >= list.length) { listEl._flushRows = null; return; }
-    step(NEXT_BATCH);
-    listEl._renderTimer = setTimeout(tick, 16);
-  };
-  listEl._renderTimer = setTimeout(tick, 16);
+// ===== 仮想スクロール: 画面に見えている範囲の前後の行だけを描画する(数千曲でも行数は約100に保つ) =====
+const ROW_H = 63;     // 曲の行の高さ(CSSの .track-item と一致させる)
+const PLAY_H = 64;    // 先頭の「再生/シャッフル」行の高さ(CSSの .play-row と一致させる)
+const V_BUFFER = 30;  // 見えている範囲の上下に、余分に描画しておく行数(速いスクロールで空白が出ないように)
+
+function updateVirtualWindow(listEl, force) {
+  const v = listEl._v;
+  if (!v || listEl.getClientRects().length === 0) return; // 表示されていない一覧は更新しない
+  const view = listEl.closest('.view');
+  if (!view) return;
+  const listTop = listEl.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop;
+  const first = Math.floor((view.scrollTop - listTop - PLAY_H) / ROW_H);
+  const visible = Math.ceil(view.clientHeight / ROW_H);
+  const n = v.list.length;
+  const needStart = Math.max(0, first);
+  const needEnd = Math.min(n, first + visible + 1);
+  // 必要な範囲が、描画済みの範囲(の内側に余裕を持たせた範囲)に収まっていれば、何もしない
+  if (!force && v.start >= 0 && v.start <= Math.max(0, needStart - V_BUFFER / 3) && v.end >= Math.min(n, needEnd + V_BUFFER / 3)) return;
+  const start = Math.max(0, first - V_BUFFER);
+  const end = Math.min(n, first + visible + V_BUFFER);
+  while (v.top.nextSibling && v.top.nextSibling !== v.bottom) v.top.nextSibling.remove();
+  v.bottom.insertAdjacentHTML('beforebegin', v.list.slice(start, end).map(trackItemHTML).join(''));
+  v.top.style.height = `${start * ROW_H}px`;
+  v.bottom.style.height = `${(n - end) * ROW_H}px`;
+  v.start = start;
+  v.end = end;
+}
+
+function renderVirtualList(listEl, list) {
+  const top = document.createElement('li');
+  const bottom = document.createElement('li');
+  top.className = bottom.className = 'v-spacer';
+  listEl.append(top, bottom);
+  listEl._v = { list, top, bottom, start: -1, end: -1 };
+  const view = listEl.closest('.view');
+  if (view && !view._vScrollBound) {
+    view._vScrollBound = true;
+    let pending = false;
+    view.addEventListener('scroll', () => {
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(() => {
+        pending = false;
+        view.querySelectorAll('ul').forEach(ul => { if (ul._v) updateVirtualWindow(ul, false); });
+      });
+    }, { passive: true });
+  }
+  updateVirtualWindow(listEl, true);
 }
 
 // 曲一覧の共通の描画。先頭に再生/シャッフルを置き、クリックは一覧全体で1回だけ受ける(行ごとに登録しない)
 function fillTrackList(listEl, list, ids) {
   listEl.innerHTML = '';
   listEl._queueIds = ids;
+  listEl._v = null;
   if (list.length > 0) listEl.appendChild(buildPlayRow(ids));
-  renderRowsProgressively(listEl, list);
+  renderVirtualList(listEl, list);
   if (listEl._clickBound) return;
   listEl._clickBound = true;
   listEl.addEventListener('click', (e) => {

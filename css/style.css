@@ -340,8 +340,10 @@ html, body {
 /* 曲が多くて画面に収まらないとき、絞り込みの行などが縮んで見えなくなるのを防ぐ */
 .view > * { flex-shrink: 0; }
 
-/* 画面外の行は描画・レイアウトを省略して、曲が多くても軽くする */
-.track-item { content-visibility: auto; contain-intrinsic-size: auto 63px; }
+/* 仮想スクロール用: 行の高さを固定する(js/app.js の ROW_H / PLAY_H と一致させること) */
+.track-list .track-item { height: 63px; }
+.play-row { height: 64px; padding-top: 8px; padding-bottom: 12px; }
+.v-spacer { list-style: none; margin: 0; padding: 0; border: 0; }
 
 /* 画面の切り替えを速くする: 見えていない画面を display:none で破棄せず、描画だけ省略して表示計算(レイアウト)を保つ。
    曲が多い一覧の作り直しを、切り替えのたびに行わずに済む。未対応のブラウザでは従来どおり display:none */
