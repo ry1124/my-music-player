@@ -199,6 +199,18 @@ function bindUIEvents() {
     renderPlaylistList();
   });
   document.getElementById('btn-back-playlists').addEventListener('click', () => showView('view-playlists'));
+  document.getElementById('btn-playlist-add').addEventListener('click', openAddSongs);
+  document.getElementById('btn-add-songs-done').addEventListener('click', closeAddSongs);
+  let addSongsTimer = null;
+  document.getElementById('add-songs-search').addEventListener('input', (e) => {
+    const v = e.target.value.trim();
+    clearTimeout(addSongsTimer);
+    addSongsTimer = setTimeout(() => renderAddSongsList(v), 200);
+  });
+  document.getElementById('add-songs-list').addEventListener('click', (e) => {
+    const li = e.target.closest('.add-row');
+    if (li) toggleSongInPlaylist(li.dataset.trackId);
+  });
   // ミニプレイヤー
   document.getElementById('mini-player').addEventListener('click', (e) => {
     if (e.target.closest('button')) return;
@@ -1240,7 +1252,7 @@ function updateVirtualWindow(listEl, force) {
   const start = Math.max(0, first - V_BUFFER);
   const end = Math.min(n, first + visible + V_BUFFER);
   while (v.top.nextSibling && v.top.nextSibling !== v.bottom) v.top.nextSibling.remove();
-  v.bottom.insertAdjacentHTML('beforebegin', v.list.slice(start, end).map(trackItemHTML).join(''));
+  v.bottom.insertAdjacentHTML('beforebegin', v.list.slice(start, end).map(listEl._rowFn || trackItemHTML).join(''));
   v.top.style.height = `${start * ROW_H}px`;
   v.bottom.style.height = `${(n - end) * ROW_H}px`;
   v.start = start;
@@ -1577,9 +1589,63 @@ function openPlaylistDetail(playlistId) {
     plTracks = pl.trackIds.map(id => tracks.find(t => t.id === id)).filter(Boolean);
   }
   document.getElementById('playlist-detail-title').textContent = pl.name;
+  document.getElementById('btn-playlist-add').classList.toggle('hidden', typeof playlistId !== 'number'); // 曲を足せるのは自分のプレイリストだけ
   const listEl = document.getElementById('playlist-detail-list');
   fillTrackList(listEl, plTracks, plTracks.map(t => t.id));
   showView('view-playlist-detail');
+}
+
+// ===== プレイリストに曲を追加する画面(Apple Musicと同じく、検索して「＋」を押していく) =====
+let addSongsPlaylist = null;
+
+function addRowHTML(track) {
+  const on = addSongsPlaylist && addSongsPlaylist.trackIds.includes(track.id);
+  return `<li class="track-item add-row" data-track-id="${track.id}">` +
+    `<img class="track-artwork" loading="lazy" decoding="async" src="${getThumbUrl(track)}" alt="">` +
+    `<div class="track-meta"><div class="track-title">${esc(track.title)}</div><div class="track-artist">${esc(track.artist)}</div></div>` +
+    `<button class="add-btn${on ? ' on' : ''}">${on ? '✓' : '＋'}</button></li>`;
+}
+
+function renderAddSongsList(query) {
+  const q = (query || '').normalize('NFKC').toLowerCase();
+  const list = tracks
+    .filter(t => !q || `${t.title} ${t.artist} ${t.album || ''}`.normalize('NFKC').toLowerCase().includes(q))
+    .sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
+  const listEl = document.getElementById('add-songs-list');
+  listEl.innerHTML = '';
+  listEl._rowFn = addRowHTML;
+  listEl._v = null;
+  renderVirtualList(listEl, list);
+}
+
+function openAddSongs() {
+  const pl = playlists.find(p => p.id === currentPlaylistId);
+  if (!pl) return;
+  addSongsPlaylist = pl;
+  document.getElementById('add-songs-search').value = '';
+  renderAddSongsList('');
+  showView('view-add-songs');
+  document.getElementById('view-add-songs').scrollTop = 0;
+}
+
+async function toggleSongInPlaylist(trackIdText) {
+  const pl = addSongsPlaylist;
+  const t = tracks.find(x => String(x.id) === trackIdText);
+  if (!pl || !t) return;
+  const i = pl.trackIds.indexOf(t.id);
+  if (i >= 0) pl.trackIds.splice(i, 1); else pl.trackIds.push(t.id);
+  const on = i < 0;
+  document.querySelectorAll(`#add-songs-list .add-row[data-track-id="${t.id}"] .add-btn`).forEach((b) => {
+    b.classList.toggle('on', on);
+    b.textContent = on ? '✓' : '＋';
+  });
+  await DB.updatePlaylist(pl);
+}
+
+function closeAddSongs() {
+  addSongsPlaylist = null;
+  renderPlaylistList();
+  openPlaylistDetail(currentPlaylistId); // 追加した曲が並んだ状態で、プレイリストに戻る
 }
 
 async function openPlaylistActionSheet(pl) {

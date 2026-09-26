@@ -55,8 +55,21 @@
     <header class="topbar">
       <button id="btn-back-playlists" class="icon-btn">‹ 戻る</button>
       <h1 id="playlist-detail-title">プレイリスト</h1>
+      <button id="btn-playlist-add" class="icon-btn hidden" title="曲を追加">＋</button>
     </header>
     <ul id="playlist-detail-list" class="track-list"></ul>
+  </section>
+
+  <!-- ===== プレイリストに曲を追加する画面 ===== -->
+  <section id="view-add-songs" class="view">
+    <header class="topbar">
+      <h1>曲を追加</h1>
+      <button id="btn-add-songs-done" class="icon-btn year-sort-btn">完了</button>
+    </header>
+    <div class="search-bar">
+      <input id="add-songs-search" type="search" placeholder="曲・アーティストを検索">
+    </div>
+    <ul id="add-songs-list" class="track-list"></ul>
   </section>
 
   <!-- ===== 年代別画面 ===== -->

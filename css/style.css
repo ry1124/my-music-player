@@ -368,3 +368,7 @@ html, body {
 .np-fav { display: flex; align-items: center; color: var(--text-dim); padding: 6px 8px; }
 .np-fav.on { color: var(--accent); }
 .fav-mark { color: var(--accent); font-size: 13px; flex-shrink: 0; }
+
+/* プレイリストに曲を追加する画面 */
+.add-btn { width: 32px; height: 32px; border-radius: 50%; border: 0; background: var(--surface2); color: var(--accent); font-size: 18px; font-weight: 700; flex-shrink: 0; }
+.add-btn.on { background: var(--accent); color: #fff; }
