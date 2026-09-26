@@ -95,6 +95,7 @@ function showView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(id).classList.add('active');
   document.body.classList.toggle('np-open', id === 'view-nowplaying'); // 再生画面ではミニプレイヤー/タブバーを隠す
+  if (id === 'view-playlists' && playlistListDirty) renderPlaylistList();
   refreshIndexTarget();
   document.getElementById(id).querySelectorAll('ul').forEach(ul => { if (ul._v) updateVirtualWindow(ul, false); });
 }
@@ -1428,9 +1429,17 @@ function autoSeason(track) {
   }
   return '';
 }
+// 自動判定は歌詞まで正規表現で調べるので重い。曲ごとに結果を覚えておき、曲名・アルバム・歌詞・手動設定が変わったときだけ判定し直す
+const seasonCache = new Map(); // 曲のid → { sig, val }
 function seasonOf(track) {
   if (track.season === 'none') return '';
-  return track.season || autoSeason(track);
+  if (track.season) return track.season;
+  const sig = `${track.title}|${track.album}|${track.lyrics ? track.lyrics.length : 0}`;
+  const c = seasonCache.get(track.id);
+  if (c && c.sig === sig) return c.val;
+  const val = autoSeason(track);
+  seasonCache.set(track.id, { sig, val });
+  return val;
 }
 async function setTrackSeason(track) {
   const options = [...SEASONS.map(d => d.label), 'どれでもない', '自動判定に戻す'];
@@ -1472,26 +1481,34 @@ function orderedPlaylistItems() {
   return [...defaults.filter(it => byKey.has(playlistItemKey(it))), ...savedItems];
 }
 
+// プレイリスト画面を開いていないときは描画せず、開いたときにまとめて描く(★の付け外しなどのたびに全曲を調べ直さない)
+let playlistListDirty = true;
 function renderPlaylistList() {
+  if (!document.getElementById('view-playlists').classList.contains('active')) { playlistListDirty = true; return; }
+  playlistListDirty = false;
   const listEl = document.getElementById('playlist-list');
   listEl.innerHTML = '';
+  const byId = new Map(tracks.map(t => [t.id, t]));
+  const bySeason = new Map();
+  tracks.forEach((t) => { const k = seasonOf(t); if (k) { if (!bySeason.has(k)) bySeason.set(k, []); bySeason.get(k).push(t); } });
+  const favs = tracks.filter(t => t.favorite);
   orderedPlaylistItems().forEach((item) => {
     const li = document.createElement('li');
     li.className = 'playlist-item';
     li.dataset.key = playlistItemKey(item);
     let list, name, countText, open;
     if (item.fav) {
-      list = tracks.filter(t => t.favorite);
+      list = favs;
       name = 'お気に入りの曲';
       countText = `${list.length}曲`;
       open = () => openPlaylistDetail('fav');
     } else if (item.season) {
-      list = tracks.filter(t => seasonOf(t) === item.season.key);
+      list = bySeason.get(item.season.key) || [];
       name = item.season.label;
       countText = `${list.length}曲(自動)`;
       open = () => openPlaylistDetail('season:' + item.season.key);
     } else {
-      list = item.pl.trackIds.map(id => tracks.find(t => t.id === id)).filter(Boolean);
+      list = item.pl.trackIds.map(id => byId.get(id)).filter(Boolean);
       name = item.pl.name;
       countText = `${item.pl.trackIds.length}曲`;
       open = () => openPlaylistDetail(item.pl.id);
@@ -1634,11 +1651,13 @@ function addRowHTML(track) {
     `<button class="add-btn${on ? ' on' : ''}">${on ? '✓' : '＋'}</button></li>`;
 }
 
+let addSongsSorted = { version: -1, list: [] };
 function renderAddSongsList(query) {
   const q = (query || '').normalize('NFKC').toLowerCase();
-  const list = tracks
-    .filter(t => !q || `${t.title} ${t.artist} ${t.album || ''}`.normalize('NFKC').toLowerCase().includes(q))
-    .sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
+  if (addSongsSorted.version !== libVersion) { // 並べ替えは重いので、ライブラリが変わったときだけやり直す
+    addSongsSorted = { version: libVersion, list: tracks.slice().sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b))) };
+  }
+  const list = addSongsSorted.list.filter(t => !q || `${t.title} ${t.artist} ${t.album || ''}`.normalize('NFKC').toLowerCase().includes(q));
   const listEl = document.getElementById('add-songs-list');
   listEl.innerHTML = '';
   listEl._rowFn = addRowHTML;
