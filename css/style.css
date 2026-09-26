@@ -350,3 +350,13 @@ html, body {
 @supports (content-visibility: hidden) {
   .view:not(.active) { display: flex; content-visibility: hidden; visibility: hidden; pointer-events: none; }
 }
+
+/* 歌詞のタイミング調整(歌詞欄の下に固定) */
+.lyric-offset { position: absolute; left: 0; right: 0; bottom: 10px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 6px; }
+.lyric-offset-break { flex-basis: 100%; height: 0; }
+.lyric-sync-btn.waiting { background: var(--accent); color: #fff; }
+.lyric-offset-btn, .lyric-offset-label {
+  border: none; border-radius: 14px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+  background: var(--surface); color: var(--accent); cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+}
+.lyric-offset-label { color: var(--text-dim); }

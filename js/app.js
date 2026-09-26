@@ -490,19 +490,57 @@ async function handleLyricsFilesSelected(fileList) {
 const LRCLIB_BASE = 'https://lrclib.net/api';
 let isAutoFetchingLyrics = false;
 
-async function fetchLrcFromLrclib(artist, title) {
-  const url = `${LRCLIB_BASE}/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`;
-  const res = await fetch(url);
-  if (res.status === 404) return null;
+// 同じ曲でも、lrclibには長さ(イントロなど)の違う版が複数登録されている。曲の長さが近い版を選ばないと、歌詞のタイミングがずれる
+const LYRIC_DURATION_TOLERANCE = 3; // 秒。これ以内なら「同じ版」とみなす
+async function fetchLrcFromLrclib(artist, title, duration) {
+  const searchUrl = `${LRCLIB_BASE}/search?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`;
+  const res = await fetch(searchUrl);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const list = (await res.json()).filter(r => !r.instrumental && (r.syncedLyrics || r.plainLyrics));
+  if (list.length === 0) return null;
+  const diff = (r) => (duration > 0 && r.duration > 0 ? Math.abs(r.duration - duration) : Infinity);
+  // 1) 長さが近く、時刻付きの歌詞がある版 → 2) 長さが近い、時刻なしの歌詞 → 3) それ以外(長さが分からない場合の最後の手段)
+  const near = list.filter(r => diff(r) <= LYRIC_DURATION_TOLERANCE).sort((x, y) => diff(x) - diff(y));
+  const pick = near.find(r => r.syncedLyrics) || near[0];
+  if (pick) return { ...pick, matchedByDuration: true };
+  if (duration > 0) {
+    // 長さの合う版が無い: 時刻付きの歌詞は使わない(ずれるため)。文字だけの歌詞があれば、それだけ使う
+    const plain = list.find(r => r.plainLyrics);
+    return plain ? { plainLyrics: plain.plainLyrics, syncedLyrics: null, matchedByDuration: false } : null;
+  }
+  return list.find(r => r.syncedLyrics) || list[0];
+}
+
+// 1曲分の歌詞を検索して、その曲に反映する。反映できたら 'synced' / 'plain'、見つからなければ null
+async function applyLyricsFromNet(track, onlyIfMatched = false) {
+  const data = await fetchLrcFromLrclib(track.artist, track.title, track.duration);
+  if (!data || !(data.syncedLyrics || data.plainLyrics)) return null;
+  if (onlyIfMatched && !(data.syncedLyrics && data.matchedByDuration)) return null; // 入れ直しモード: 長さの合う時刻付きの版が見つかったときだけ差し替える
+  if (data.syncedLyrics) {
+    const synced = parseLrc(data.syncedLyrics);
+    track.syncedLyrics = synced.length > 0 ? synced : null;
+    track.lyrics = synced.length > 0 ? synced.map(l => l.text).filter(Boolean).join('\n') : data.plainLyrics || '';
+  } else {
+    track.syncedLyrics = null;
+    track.lyrics = data.plainLyrics;
+  }
+  track.lyricOffset = 0;
+  track.lyricsDurationMatched = !!data.matchedByDuration; // 曲の長さに合う版を採用した印(入れ直しの対象から外す)
+  await DB.updateTrack(track);
+  return track.syncedLyrics ? 'synced' : 'plain';
 }
 
 async function autoFetchLyrics() {
   if (isAutoFetchingLyrics) { alert('すでに検索中です'); return; }
-  const targets = tracks.filter(t => !t.lyrics);
-  if (targets.length === 0) { alert('歌詞が無い曲はありません'); return; }
-  if (!confirm(`歌詞が無い${targets.length}曲をネットで自動検索します。曲数によっては数分〜十数分かかります。アプリを開いたまま待つ必要があります。始めますか?`)) return;
+  const idx = await showChoiceSheet('歌詞をネットから自動検索', ['歌詞が無い曲を検索', '時刻付き歌詞を、曲の長さに合う版で入れ直す(ずれ直し)']);
+  if (idx < 0) return;
+  const resync = idx === 1;
+  const targets = resync ? tracks.filter(t => t.syncedLyrics && t.syncedLyrics.length > 0 && !t.lyricsDurationMatched) : tracks.filter(t => !t.lyrics);
+  if (targets.length === 0) { alert(resync ? '入れ直す対象の曲はありません' : '歌詞が無い曲はありません'); return; }
+  const message = resync
+    ? `時刻付き歌詞のある${targets.length}曲について、曲の長さに合う版を探して入れ直します。長さの合う版が見つかった曲だけ差し替え、見つからない曲は今のままです(手動で読み込んだ歌詞ファイルも、合う版が見つかれば入れ替わります)。数分〜十数分かかります。アプリを開いたまま待つ必要があります。始めますか?`
+    : `歌詞が無い${targets.length}曲をネットで自動検索します。曲数によっては数分〜十数分かかります。アプリを開いたまま待つ必要があります。始めますか?`;
+  if (!confirm(message)) return;
 
   isAutoFetchingLyrics = true;
   const progressEl = document.getElementById('import-progress');
@@ -519,22 +557,9 @@ async function autoFetchLyrics() {
       `歌詞をネット検索中... ${i + 1}/${targets.length}曲 (見つかった:${found}件) ` +
       (etaMin > 0 ? `残り約${etaMin}分 ` : '') + track.title;
     try {
-      const data = await fetchLrcFromLrclib(track.artist, track.title);
-      if (data && (data.syncedLyrics || data.plainLyrics)) {
-        if (data.syncedLyrics) {
-          const synced = parseLrc(data.syncedLyrics);
-          track.syncedLyrics = synced.length > 0 ? synced : null;
-          track.lyrics = synced.length > 0 ? synced.map(l => l.text).filter(Boolean).join('\n') : data.plainLyrics || '';
-          if (track.syncedLyrics) syncedCount++;
-        } else {
-          track.syncedLyrics = null;
-          track.lyrics = data.plainLyrics;
-        }
-        await DB.updateTrack(track);
-        found++;
-      } else {
-        notFound++;
-      }
+      const result = await applyLyricsFromNet(track, resync);
+      if (result) { found++; if (result === 'synced') syncedCount++; }
+      else notFound++;
     } catch (err) {
       console.error('歌詞検索失敗:', track.title, err);
       errorCount++;
@@ -1265,7 +1290,7 @@ function showChoiceSheet(title, options) {
 }
 
 async function openTrackActionSheet(track) {
-  const options = ['プレイリストに追加', '歌詞ファイルを読み込む'];
+  const options = ['プレイリストに追加', '歌詞ファイルを読み込む', '歌詞をネットで再検索'];
   if (currentPlaylistId !== null) options.push('このプレイリストから削除');
   options.push('ライブラリから削除');
   const idx = await showChoiceSheet(track.title, options);
@@ -1273,8 +1298,23 @@ async function openTrackActionSheet(track) {
   const label = options[idx];
   if (label === 'プレイリストに追加') addTrackToPlaylistPrompt(track.id);
   else if (label === '歌詞ファイルを読み込む') importLyricsForTrack(track);
+  else if (label === '歌詞をネットで再検索') refetchLyrics(track);
   else if (label === 'このプレイリストから削除') removeTrackFromCurrentPlaylist(track.id);
   else if (label === 'ライブラリから削除') deleteTrackFromLibrary(track.id);
+}
+
+// この1曲だけ、曲の長さに合う歌詞をネットで検索し直す(ずれている曲の直し用)
+async function refetchLyrics(track) {
+  try {
+    const result = await applyLyricsFromNet(track);
+    if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
+    if (result === 'synced') alert('曲の長さに合う歌詞が見つかりました。曲に合わせて動きます。');
+    else if (result === 'plain') alert('この曲の長さに合う「時刻付き」の歌詞は見つからず、文字だけの歌詞を登録しました(曲に合わせては動きません)。');
+    else alert('この曲の歌詞は見つかりませんでした。');
+  } catch (err) {
+    console.error('歌詞の再検索失敗:', track.title, err);
+    alert('歌詞の検索に失敗しました(通信状況を確認してください)。');
+  }
 }
 
 async function deleteTrackFromLibrary(trackId) {
@@ -1489,8 +1529,15 @@ function showMiniPlayer() {
 }
 
 function bindAudioEvents() {
-  audioEl.addEventListener('play', () => setPlayPauseIcon(true));
-  audioEl.addEventListener('pause', () => setPlayPauseIcon(false));
+  // 歌詞の切り替えは、再生中だけ毎フレーム確認する(timeupdateは約0.25秒に1回なので、それだけだと歌詞が遅れて見える)
+  let lyricRaf = null;
+  const lyricLoop = () => {
+    highlightCurrentLyricLine();
+    lyricRaf = audioEl.paused ? null : requestAnimationFrame(lyricLoop);
+  };
+  audioEl.addEventListener('play', () => { setPlayPauseIcon(true); if (lyricRaf === null) lyricRaf = requestAnimationFrame(lyricLoop); });
+  audioEl.addEventListener('pause', () => { setPlayPauseIcon(false); if (lyricRaf !== null) { cancelAnimationFrame(lyricRaf); lyricRaf = null; } });
+  audioEl.addEventListener('seeked', () => highlightCurrentLyricLine());
   audioEl.addEventListener('ended', () => {
     if (repeatMode === 'one') {
       audioEl.currentTime = 0;
@@ -1537,11 +1584,14 @@ let lastActiveLyricIdx = -1;
 function toggleLyrics() {
   const pane = document.getElementById('np-lyrics');
   pane.classList.toggle('hidden');
-  if (!pane.classList.contains('hidden')) { lastActiveLyricIdx = -1; updateLyricsPane(); }
+  if (pane.classList.contains('hidden')) document.getElementById('lyric-offset').classList.add('hidden'); // 歌詞を隠すときは調整ボタンも隠す
+  else { lastActiveLyricIdx = -1; updateLyricsPane(); }
 }
 
 function updateLyricsPane() {
   const pane = document.getElementById('np-lyrics');
+  const offsetBar = document.getElementById('lyric-offset');
+  offsetBar.classList.add('hidden'); // 時刻付きの歌詞を表示しているときだけ出す
   if (pane.classList.contains('hidden')) return;
   pane.innerHTML = '';
   pane.onclick = null;
@@ -1551,9 +1601,21 @@ function updateLyricsPane() {
       const div = document.createElement('div');
       div.className = 'lyric-line';
       div.textContent = line.text || '♪';
-      div.addEventListener('click', () => { audioEl.currentTime = line.time; });
+      div.addEventListener('click', () => {
+        if (lyricSyncMode) {
+          // 「今、この行を歌っている」→ 今の再生位置に、この行の時刻が来るように補正する
+          setLyricOffset(line.time - audioEl.currentTime);
+          lyricSyncMode = false;
+          const bar = document.getElementById('lyric-offset');
+          if (bar._syncDone) bar._syncDone();
+          return;
+        }
+        audioEl.currentTime = Math.max(0, line.time - (currentTrack.lyricOffset || 0));
+      });
       pane.appendChild(div);
     });
+    offsetBar.replaceChildren(...buildLyricOffsetControls());
+    offsetBar.classList.remove('hidden');
     lastActiveLyricIdx = -1;
     highlightCurrentLyricLine();
   } else if (currentTrack.lyrics) {
@@ -1574,18 +1636,70 @@ function updateLyricsPane() {
   }
 }
 
+// 歌詞のタイミング手動調整(歌詞欄の下に固定)。プラス = 歌詞が早く出る / マイナス = 遅く出る。曲ごとに保存する
+let lyricOffsetSaveTimer = null;
+let lyricSyncMode = false; // true の間は、次にタップした歌詞の行を「今歌っている行」として、自動で合わせる
+
+function setLyricOffset(value) {
+  currentTrack.lyricOffset = Math.round(value * 10) / 10;
+  lastActiveLyricIdx = -1;
+  highlightCurrentLyricLine();
+  clearTimeout(lyricOffsetSaveTimer);
+  const target = currentTrack;
+  lyricOffsetSaveTimer = setTimeout(() => DB.updateTrack(target), 700); // 連続で押している間は保存しない
+}
+
+function buildLyricOffsetControls() {
+  lyricSyncMode = false;
+  const label = document.createElement('button');
+  label.className = 'lyric-offset-label';
+  const show = () => {
+    const o = currentTrack.lyricOffset || 0;
+    label.textContent = `ずれ ${o > 0 ? '+' : ''}${o.toFixed(1)}秒`;
+  };
+  const change = (delta) => { setLyricOffset((currentTrack.lyricOffset || 0) + delta); show(); };
+  const mk = (text, delta) => {
+    const b = document.createElement('button');
+    b.className = 'lyric-offset-btn';
+    b.textContent = text;
+    b.addEventListener('click', (e) => { e.stopPropagation(); change(delta); });
+    return b;
+  };
+  label.addEventListener('click', (e) => { e.stopPropagation(); setLyricOffset(0); show(); }); // 押すと0に戻す
+
+  const sync = document.createElement('button');
+  sync.className = 'lyric-offset-btn lyric-sync-btn';
+  const syncIdle = 'タップで合わせる';
+  sync.textContent = syncIdle;
+  sync.addEventListener('click', (e) => {
+    e.stopPropagation();
+    lyricSyncMode = !lyricSyncMode;
+    sync.textContent = lyricSyncMode ? '今歌っている行をタップ' : syncIdle;
+    sync.classList.toggle('waiting', lyricSyncMode);
+  });
+  // 歌詞の行がタップされたとき(updateLyricsPane から呼ばれる)に、合わせ終わった表示へ戻すためのフック
+  sync._done = () => { sync.textContent = syncIdle; sync.classList.remove('waiting'); show(); };
+  document.getElementById('lyric-offset')._syncDone = sync._done;
+
+  show();
+  const br = document.createElement('div');
+  br.className = 'lyric-offset-break';
+  return [mk('−1', -1), mk('−0.1', -0.1), label, mk('+0.1', 0.1), mk('+1', 1), br, sync];
+}
+
 // 再生位置に合わせて現在の行をハイライト+自動スクロール(timeupdateから呼ばれる)
 function highlightCurrentLyricLine() {
   const pane = document.getElementById('np-lyrics');
   if (pane.classList.contains('hidden')) return;
   if (!currentTrack || !currentTrack.syncedLyrics || currentTrack.syncedLyrics.length === 0) return;
 
-  const t = audioEl.currentTime;
+  const t = audioEl.currentTime + (currentTrack.lyricOffset || 0); // 手動調整(プラスで歌詞が早く出る)
   const lines = currentTrack.syncedLyrics;
-  let activeIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].time <= t) activeIdx = i;
-    else break;
+  let lo = 0, hi = lines.length - 1, activeIdx = -1; // 二分探索: 時刻が t 以下の最後の行
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (lines[mid].time <= t) { activeIdx = mid; lo = mid + 1; }
+    else hi = mid - 1;
   }
   if (activeIdx === lastActiveLyricIdx) return;
   lastActiveLyricIdx = activeIdx;
@@ -1593,7 +1707,9 @@ function highlightCurrentLyricLine() {
   const lineEls = pane.querySelectorAll('.lyric-line');
   lineEls.forEach((el, idx) => el.classList.toggle('active', idx === activeIdx));
   if (activeIdx >= 0 && lineEls[activeIdx]) {
-    lineEls[activeIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    // scrollIntoViewは外側の画面まで動かすことがあるため、歌詞欄の中だけをスクロールする
+    const el = lineEls[activeIdx];
+    pane.scrollTo({ top: el.offsetTop - pane.clientHeight / 2 + el.offsetHeight / 2, behavior: 'smooth' });
   }
 }
 
