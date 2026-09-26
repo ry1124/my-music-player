@@ -360,3 +360,6 @@ html, body {
   background: var(--surface); color: var(--accent); cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.15);
 }
 .lyric-offset-label { color: var(--text-dim); }
+
+.reorder-btn { font-size: 18px; padding: 8px 12px; }
+.reorder-btn:disabled { opacity: .25; }

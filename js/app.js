@@ -190,6 +190,12 @@ function bindUIEvents() {
   });
 
   document.getElementById('btn-new-playlist').addEventListener('click', createPlaylistPrompt);
+  const btnReorder = document.getElementById('btn-reorder-playlist');
+  btnReorder.addEventListener('click', () => {
+    playlistEditMode = !playlistEditMode;
+    btnReorder.textContent = playlistEditMode ? '完了' : '並び替え';
+    renderPlaylistList();
+  });
   document.getElementById('btn-back-playlists').addEventListener('click', () => showView('view-playlists'));
   document.getElementById('btn-delete-playlist').addEventListener('click', deleteCurrentPlaylist);
 
@@ -1318,13 +1324,14 @@ function showChoiceSheet(title, options) {
 }
 
 async function openTrackActionSheet(track) {
-  const options = ['プレイリストに追加', '歌詞ファイルを読み込む', '歌詞をネットで再検索'];
-  if (currentPlaylistId !== null) options.push('このプレイリストから削除');
+  const options = ['プレイリストに追加', '季節を設定(春夏秋冬)', '歌詞ファイルを読み込む', '歌詞をネットで再検索'];
+  if (typeof currentPlaylistId === 'number') options.push('このプレイリストから削除');
   options.push('ライブラリから削除');
   const idx = await showChoiceSheet(track.title, options);
   if (idx < 0) return;
   const label = options[idx];
   if (label === 'プレイリストに追加') addTrackToPlaylistPrompt(track.id);
+  else if (label === '季節を設定(春夏秋冬)') setTrackSeason(track);
   else if (label === '歌詞ファイルを読み込む') importLyricsForTrack(track);
   else if (label === '歌詞をネットで再検索') refetchLyrics(track);
   else if (label === 'このプレイリストから削除') removeTrackFromCurrentPlaylist(track.id);
@@ -1359,11 +1366,66 @@ async function deleteTrackFromLibrary(trackId) {
   renderPlaylistList();
 }
 
+// ===== 季節のプレイリスト(春夏秋冬) =====
+// 曲名・アルバム名の言葉から自動で振り分ける。手動で決めた季節(track.season)があればそちらを優先する。'none' = どれでもない
+const SEASONS = [
+  { key: 'spring', label: '春', re: /春|桜|さくら|サクラ|卒業|入学|花見|菜の花|新生活|桃の花|spring|sakura|cherry\s?blossom/gi },
+  { key: 'summer', label: '夏', re: /夏|花火|向日葵|ひまわり|入道雲|夕立|浴衣|蝉|海|サマー|summer|真夏|南国|プール|夏祭/gi },
+  { key: 'autumn', label: '秋', re: /秋|紅葉|コスモス|落ち葉|枯葉|月見|十五夜|銀杏|autumn|fall\b|ハロウィン|halloween/gi },
+  { key: 'winter', label: '冬', re: /冬|雪|クリスマス|christmas|x'?mas|winter|snow|粉雪|吹雪|聖夜|白い息|こたつ|ホワイトクリスマス/gi },
+];
+function countMatches(text, re) {
+  const m = text.match(re);
+  return m ? m.length : 0;
+}
+function autoSeason(track) {
+  // 「秋桜(コスモス)」は春の「桜」に数えない
+  const head = `${track.title || ''} ${track.album || ''}`.normalize('NFKC').replace(/秋桜/g, '秋');
+  const scoreOf = (text) => SEASONS.map(d => ({ key: d.key, n: countMatches(text, d.re) })).sort((a, b) => b.n - a.n);
+  let sc = scoreOf(head);
+  if (sc[0].n > 0 && sc[0].n > sc[1].n) return sc[0].key;
+  // 曲名で決まらないときは、歌詞に出てくる季節の言葉が多く、はっきり差がある場合だけ採用する
+  if (sc[0].n === 0 && track.lyrics) {
+    sc = scoreOf(track.lyrics.normalize('NFKC').replace(/秋桜/g, '秋'));
+    if (sc[0].n >= 3 && sc[0].n >= sc[1].n * 2) return sc[0].key;
+  }
+  return '';
+}
+function seasonOf(track) {
+  if (track.season === 'none') return '';
+  return track.season || autoSeason(track);
+}
+async function setTrackSeason(track) {
+  const options = [...SEASONS.map(d => d.label), 'どれでもない', '自動判定に戻す'];
+  const idx = await showChoiceSheet(`${track.title} の季節`, options);
+  if (idx < 0) return;
+  if (idx < SEASONS.length) track.season = SEASONS[idx].key;
+  else if (idx === SEASONS.length) track.season = 'none';
+  else delete track.season;
+  await DB.updateTrack(track);
+  renderPlaylistList();
+  if (typeof currentPlaylistId === 'string') openPlaylistDetail(currentPlaylistId);
+}
+
 // ===== プレイリスト =====
 function renderPlaylistList() {
   const listEl = document.getElementById('playlist-list');
   listEl.innerHTML = '';
-  playlists.slice().sort((a, b) => b.createdAt - a.createdAt).forEach(pl => {
+  SEASONS.forEach((d) => {
+    const list = tracks.filter(t => seasonOf(t) === d.key);
+    const li = document.createElement('li');
+    li.className = 'playlist-item';
+    const img = document.createElement('img');
+    img.className = 'playlist-artwork';
+    img.src = list.length ? getThumbUrl(list.find(t => t.artworkBlob) || list[0]) : 'icons/default-artwork.png';
+    const meta = document.createElement('div');
+    meta.className = 'track-meta';
+    meta.innerHTML = `<div class="playlist-name">${d.label}</div><div class="playlist-count">${list.length}曲(自動)</div>`;
+    li.append(img, meta);
+    li.addEventListener('click', () => openPlaylistDetail('season:' + d.key));
+    listEl.appendChild(li);
+  });
+  sortedPlaylists().forEach((pl, i, arr) => {
     const li = document.createElement('li');
     li.className = 'playlist-item';
     const firstTrack = tracks.find(t => t.id === pl.trackIds[0]);
@@ -1382,9 +1444,43 @@ function renderPlaylistList() {
     meta.appendChild(countEl);
     li.appendChild(img);
     li.appendChild(meta);
-    li.addEventListener('click', () => openPlaylistDetail(pl.id));
+    if (playlistEditMode) {
+      // 並び替え中: 右端の ▲ ▼ で1つずつ上下に動かす(タップしても開かない)
+      const mkBtn = (text, dir, disabled) => {
+        const b = document.createElement('button');
+        b.className = 'icon-btn reorder-btn';
+        b.textContent = text;
+        b.disabled = disabled;
+        b.addEventListener('click', (e) => { e.stopPropagation(); movePlaylist(pl.id, dir); });
+        return b;
+      };
+      li.append(mkBtn('▲', -1, i === 0), mkBtn('▼', 1, i === arr.length - 1));
+    } else {
+      li.addEventListener('click', () => openPlaylistDetail(pl.id));
+    }
     listEl.appendChild(li);
   });
+}
+
+// 自分で決めた順(order)を優先。まだ並び替えていないプレイリストは、作成が新しい順
+let playlistEditMode = false;
+function sortedPlaylists() {
+  return playlists.slice().sort((a, b) => {
+    const oa = a.order === undefined ? Infinity : a.order;
+    const ob = b.order === undefined ? Infinity : b.order;
+    if (oa !== ob) return oa === Infinity ? 1 : ob === Infinity ? -1 : oa - ob;
+    return b.createdAt - a.createdAt;
+  });
+}
+async function movePlaylist(id, dir) {
+  const list = sortedPlaylists();
+  const i = list.findIndex(p => p.id === id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  list.forEach((p, k) => { p.order = k; });
+  renderPlaylistList();
+  for (const p of list) await DB.updatePlaylist(p);
 }
 
 async function createPlaylistPrompt() {
@@ -1399,17 +1495,27 @@ async function createPlaylistPrompt() {
 
 function openPlaylistDetail(playlistId) {
   currentPlaylistId = playlistId;
-  const pl = playlists.find(p => p.id === playlistId);
-  if (!pl) return;
+  const isSeason = typeof playlistId === 'string';
+  document.getElementById('btn-delete-playlist').classList.toggle('hidden', isSeason);
+  let pl;
+  let plTracks;
+  if (isSeason) {
+    const def = SEASONS.find(d => 'season:' + d.key === playlistId);
+    pl = { name: `${def.label}の曲` };
+    plTracks = tracks.filter(t => seasonOf(t) === def.key).sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
+  } else {
+    pl = playlists.find(p => p.id === playlistId);
+    if (!pl) return;
+    plTracks = pl.trackIds.map(id => tracks.find(t => t.id === id)).filter(Boolean);
+  }
   document.getElementById('playlist-detail-title').textContent = pl.name;
   const listEl = document.getElementById('playlist-detail-list');
-  const plTracks = pl.trackIds.map(id => tracks.find(t => t.id === id)).filter(Boolean);
   fillTrackList(listEl, plTracks, plTracks.map(t => t.id));
   showView('view-playlist-detail');
 }
 
 async function deleteCurrentPlaylist() {
-  if (currentPlaylistId === null) return;
+  if (currentPlaylistId === null || typeof currentPlaylistId === 'string') return;
   if (!confirm('このプレイリストを削除しますか? (曲自体はライブラリに残ります)')) return;
   await DB.deletePlaylist(currentPlaylistId);
   playlists = playlists.filter(p => p.id !== currentPlaylistId);
