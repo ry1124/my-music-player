@@ -364,10 +364,7 @@ html, body {
 .drag-handle { font-size: 26px; color: var(--text-dim); padding: 8px 6px 8px 16px; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
 .playlist-item.dragging { position: relative; z-index: 5; background: var(--surface2); box-shadow: 0 4px 14px rgba(0,0,0,.18); }
 
-/* 横スワイプで出る「削除」ボタン */
-.track-item, .playlist-item { touch-action: pan-y; position: relative; overflow: hidden; }
-.track-item > :not(.swipe-del), .playlist-item > :not(.swipe-del) { transition: transform .2s ease; }
-.swipe-active > :not(.swipe-del) { transform: translateX(var(--sx, 0px)); transition: none !important; }
-.swiped > :not(.swipe-del) { transform: translateX(-88px); }
-.swipe-del { position: absolute; right: 0; top: 0; bottom: 0; width: 88px; border: 0; background: #ff3b30; color: #fff; font-size: 16px; font-weight: 600; visibility: hidden; }
-.swiped .swipe-del, .swipe-active .swipe-del { visibility: visible; }
+/* お気に入り(★) */
+.np-fav { display: flex; align-items: center; color: var(--text-dim); padding: 6px 8px; }
+.np-fav.on { color: var(--accent); }
+.fav-mark { color: var(--accent); font-size: 13px; flex-shrink: 0; }
