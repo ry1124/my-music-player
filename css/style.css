@@ -339,3 +339,6 @@ html, body {
 
 /* 曲が多くて画面に収まらないとき、絞り込みの行などが縮んで見えなくなるのを防ぐ */
 .view > * { flex-shrink: 0; }
+
+/* 画面外の行は描画・レイアウトを省略して、曲が多くても軽くする */
+.track-item { content-visibility: auto; contain-intrinsic-size: auto 63px; }
