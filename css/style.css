@@ -336,3 +336,6 @@ html, body {
 .view.has-index .search-bar, .view.has-index .play-row { padding-right: 16px; }
 
 .year-sort-btn { font-size: 14px; font-weight: 600; white-space: nowrap; }
+
+/* 曲が多くて画面に収まらないとき、絞り込みの行などが縮んで見えなくなるのを防ぐ */
+.view > * { flex-shrink: 0; }
