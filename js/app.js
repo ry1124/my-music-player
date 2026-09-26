@@ -215,7 +215,6 @@ function bindUIEvents() {
       await DB.updatePlaylist(pl);
     });
   });
-  document.getElementById('add-mode-bar').addEventListener('click', toggleLibraryAddMode);
   document.getElementById('btn-add-songs-done').addEventListener('click', closeAddSongs);
   let addSongsTimer = null;
   document.getElementById('add-songs-search').addEventListener('input', (e) => {
@@ -1314,8 +1313,7 @@ function fillTrackList(listEl, list, ids) {
     if (!li || !listEl.contains(li)) return;
     const track = tracks.find(t => String(t.id) === li.dataset.trackId);
     if (!track) return;
-    if (listEl.id === 'track-list' && libraryAddMode) toggleSongInPlaylist(String(track.id)); // 追加モード中は、タップ=追加/取り消し
-    else if (e.target.closest('.track-menu-btn')) openTrackActionSheet(track);
+    if (e.target.closest('.track-menu-btn')) openTrackActionSheet(track);
     else playTrackById(track.id, listEl._queueIds);
   });
 }
@@ -1674,32 +1672,6 @@ function openPlaylistDetail(playlistId) {
 
 // ===== プレイリストに曲を追加する画面(Apple Musicと同じく、検索して「＋」を押していく) =====
 let addSongsPlaylist = null;
-let libraryAddMode = false; // ライブラリの一覧で、曲をタップするだけでプレイリストに追加していくモード
-
-async function toggleLibraryAddMode() {
-  const bar = document.getElementById('add-mode-bar');
-  if (libraryAddMode) {
-    libraryAddMode = false;
-    addSongsPlaylist = null;
-    document.getElementById('track-list')._rowFn = null;
-    bar.classList.remove('active');
-    bar.textContent = '＋ プレイリストに曲を追加';
-    renderPlaylistList();
-    renderTrackList(document.getElementById('search-input').value.trim());
-    return;
-  }
-  if (playlists.length === 0) { alert('先に「プレイリスト」タブの＋でプレイリストを作ってください'); return; }
-  const idx = await showChoiceSheet('追加先のプレイリスト', sortedPlaylistsForPick().map(p => p.name));
-  if (idx < 0) return;
-  const pl = sortedPlaylistsForPick()[idx];
-  libraryAddMode = true;
-  addSongsPlaylist = pl;
-  document.getElementById('track-list')._rowFn = addRowHTML;
-  bar.classList.add('active');
-  bar.textContent = `「${pl.name}」に追加中 ― 曲をタップ ／ 完了`;
-  renderTrackList(document.getElementById('search-input').value.trim());
-}
-function sortedPlaylistsForPick() { return playlists.slice().sort((a, b) => b.createdAt - a.createdAt); }
 
 function addRowHTML(track) {
   const on = addSongsPlaylist && addSongsPlaylist.trackIds.includes(track.id);
@@ -1748,7 +1720,7 @@ async function toggleSongInPlaylist(trackIdText) {
 }
 
 function closeAddSongs() {
-  if (!libraryAddMode) addSongsPlaylist = null;
+  addSongsPlaylist = null;
   renderPlaylistList();
   openPlaylistDetail(currentPlaylistId); // 追加した曲が並んだ状態で、プレイリストに戻る
 }
