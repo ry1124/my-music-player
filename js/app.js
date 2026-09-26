@@ -11,7 +11,9 @@ let currentAudioUrl = null;
 let seeking = false;
 let currentPlaylistId = null; // プレイリスト詳細画面で表示中のID
 let lastGroupListView = 'view-years'; // 年代/ジャンル詳細画面から「戻る」時にどちらに戻るか
-const artworkUrlCache = new Map(); // trackId -> objectURL
+const artworkUrlCache = new Map(); // trackId -> objectURL(元のジャケット画像)
+const thumbMap = new Map();        // trackId -> 一覧用の小さなジャケット画像(Blob)
+const thumbUrlCache = new Map();   // trackId -> objectURL(サムネイル)
 
 const audioEl = document.getElementById('audio-el');
 
@@ -64,9 +66,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   registerServiceWorker();
   document.getElementById('app-version').textContent = APP_VERSION;
   tracks = await DB.getAllTracks();
+  (await DB.getAllThumbs()).forEach((blob, id) => thumbMap.set(id, blob));
   playlists = await DB.getAllPlaylists();
   renderTrackList();
   renderPlaylistList();
+  setTimeout(migrateThumbs, 1500); // 起動が落ち着いてから、足りないサムネイルを裏で作る
+  setTimeout(prerenderGroupLists, 2000); // 起動が落ち着いてから、年代/ジャンル/アーティストの一覧を先に作る
   setupIcons();
   setupIndexBar();
   showView('view-library'); // 起動直後の画面でもインデックスバーの表示状態を反映
@@ -85,7 +90,7 @@ function showView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(id).classList.add('active');
   indexListId = INDEX_VIEWS[id] || null;
-  if (id === 'view-group-detail' && lastGroupListView === 'view-genres') indexListId = 'group-detail-list'; // ジャンルの中(アルバム一覧・曲)
+  if (id === 'view-group-detail' && (lastGroupListView === 'view-genres' || lastGroupListView === 'view-years')) indexListId = 'group-detail-list'; // ジャンル・年代の中(アルバム一覧・曲)
   document.getElementById('index-bar').classList.toggle('hidden', !indexListId);
   document.getElementById(id).classList.toggle('has-index', !!indexListId);
   document.body.classList.toggle('np-open', id === 'view-nowplaying'); // 再生画面ではミニプレイヤー/タブバーを隠す
@@ -277,6 +282,7 @@ async function importOneFile(file, sourceKey, orderHint) {
   };
   const id = await DB.addTrack(track);
   track.id = id;
+  await saveThumb(track);
   return track;
 }
 
@@ -341,6 +347,7 @@ async function handleFilesSelected(fileList) {
   }
 
   progressEl.classList.add('hidden');
+  markLibraryChanged();
   renderTrackList(document.getElementById('search-input').value.trim());
   const totalSec = Math.round((Date.now() - startTime) / 1000);
   const timeText = totalSec >= 60 ? `${Math.floor(totalSec / 60)}分${totalSec % 60}秒` : `${totalSec}秒`;
@@ -562,6 +569,7 @@ async function rescanYearGenreTags() {
             if (art) {
               track.artworkBlob = art;
               artworkUrlCache.delete(track.id); // 古い(既定画像の)キャッシュを捨てて、次の描画で新しい画像を使う
+              thumbUrlCache.delete(track.id);
             }
           }
           track.artworkScanned = true;
@@ -590,6 +598,8 @@ async function rescanYearGenreTags() {
 
   isRescanningTags = false;
   progressEl.classList.add('hidden');
+  migrateThumbs(); // 新しく入ったジャケットのサムネイルを裏で作る
+  markLibraryChanged();
   renderTrackList(document.getElementById('search-input').value.trim());
   alert(`再スキャン完了: ${updated}/${targets.length}曲のタグ情報(年代・ジャンル・読みなど)を更新しました`);
 }
@@ -622,43 +632,69 @@ function defaultLabelSort(a, b) {
   return a.localeCompare(b, 'ja');
 }
 
-function renderGroupList(listElId, groupFn, sortFn, keyFn) {
+// 曲の追加・削除・再スキャンのたびに増やす。一覧の再利用の可否判定に使う
+let libVersion = 0;
+let prerenderTimer = null;
+function markLibraryChanged() {
+  libVersion++;
+  clearTimeout(prerenderTimer);
+  prerenderTimer = setTimeout(prerenderGroupLists, 800); // 変更のあと、空き時間に一覧を作り直しておく
+}
+
+// 年代/ジャンル/アーティストの一覧を、タブが押される前に作っておく(押したときは切り替えるだけで済む)
+function prerenderGroupLists() {
+  renderYearList();
+  renderGenreList();
+  renderArtistList();
+}
+
+// 「名前 + 曲数 + ジャケット」の行の一覧を、HTML文字列で一括生成する。クリックは一覧全体で1回だけ受ける
+// rows: [{ name, count, artUrl, section, onClick }]
+function fillGroupRows(listEl, rows) {
+  clearTimeout(listEl._renderTimer); // 曲一覧の段階描画が残っていれば止める
+  listEl._flushRows = null;
+  listEl._rows = rows;
+  listEl.innerHTML = rows.map((r, i) =>
+    `<li class="playlist-item" data-i="${i}" data-section="${esc(r.section)}">` +
+    `<img class="playlist-artwork" loading="lazy" decoding="async" src="${r.artUrl}" alt="">` +
+    `<div class="track-meta"><div class="playlist-name">${esc(r.name)}</div><div class="playlist-count">${r.count}曲</div></div></li>`
+  ).join('');
+  if (listEl._rowsBound) return;
+  listEl._rowsBound = true;
+  listEl.addEventListener('click', (e) => {
+    const li = e.target.closest('.playlist-item');
+    if (!li || !listEl.contains(li)) return;
+    const row = listEl._rows && listEl._rows[Number(li.dataset.i)];
+    if (row) row.onClick();
+  });
+}
+
+function renderGroupList(listElId, groupFn, sortFn, keyFn, cacheKey = '') {
   const listEl = document.getElementById(listElId);
-  listEl.innerHTML = '';
+  const ver = `${libVersion}|${cacheKey}`;
+  if (listEl._ver === ver) return; // 曲が変わっていなければ、前回の一覧をそのまま使う
+  listEl._ver = ver;
   const groups = new Map(); // label -> track[]
   tracks.forEach((t) => {
     const label = groupFn(t);
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label).push(t);
   });
-  const sortedLabels = [...groups.keys()].sort(sortFn || defaultLabelSort);
-  sortedLabels.forEach((label) => {
+  const backView = { 'year-list': 'view-years', 'genre-list': 'view-genres', 'artist-list': 'view-artists' }[listElId];
+  const rows = [...groups.keys()].sort(sortFn || defaultLabelSort).map((label) => {
     const groupTracks = groups.get(label);
-    const li = document.createElement('li');
-    li.className = 'playlist-item';
-    li.dataset.section = sectionOf(keyFn ? keyFn(label) : label);
-    const img = document.createElement('img');
-    img.className = 'playlist-artwork';
-    img.src = getArtworkUrl(groupTracks[0]);
-    const meta = document.createElement('div');
-    meta.className = 'track-meta';
-    const nameEl = document.createElement('div');
-    nameEl.className = 'playlist-name';
-    nameEl.textContent = label;
-    const countEl = document.createElement('div');
-    countEl.className = 'playlist-count';
-    countEl.textContent = `${groupTracks.length}曲`;
-    meta.appendChild(nameEl);
-    meta.appendChild(countEl);
-    li.appendChild(img);
-    li.appendChild(meta);
-    const backView = { 'year-list': 'view-years', 'genre-list': 'view-genres', 'artist-list': 'view-artists' }[listElId];
-    li.addEventListener('click', () => openGroupDetail(label, groupTracks, backView));
-    listEl.appendChild(li);
+    return {
+      name: label,
+      count: groupTracks.length,
+      artUrl: getThumbUrl(groupTracks.find(t => t.artworkBlob) || groupTracks[0]),
+      section: sectionOf(keyFn ? keyFn(label) : label),
+      onClick: () => openGroupDetail(label, groupTracks, backView),
+    };
   });
+  fillGroupRows(listEl, rows);
 }
 
-function renderYearList() { renderGroupList('year-list', yearLabel, yearSortFn); }
+function renderYearList() { renderGroupList('year-list', yearLabel, yearSortFn, null, yearSortOrder); }
 function renderGenreList() { renderGroupList('genre-list', genreLabel); }
 
 function artistLabel(track) {
@@ -717,7 +753,6 @@ function renderGenreAlbumList(genre, groupTracks) {
   genreCtx = { genre, tracks: groupTracks, album: null };
   document.getElementById('group-detail-title').textContent = genre;
   const listEl = document.getElementById('group-detail-list');
-  listEl.innerHTML = '';
   const groups = new Map();
   groupTracks.forEach((t) => {
     const a = albumLabel(t);
@@ -732,30 +767,17 @@ function renderGenreAlbumList(genre, groupTracks) {
     if (b === 'アルバム不明') return -1;
     return sectionSort(keyOf(a), keyOf(b));
   });
-  const addRow = (name, list, onClick) => {
-    const li = document.createElement('li');
-    li.className = 'playlist-item';
-    li.dataset.section = sectionOf(keyOf(name));
-    const img = document.createElement('img');
-    img.className = 'playlist-artwork';
-    img.src = getArtworkUrl(list.find(t => t.artworkBlob) || list[0]);
-    const meta = document.createElement('div');
-    meta.className = 'track-meta';
-    const nameEl = document.createElement('div');
-    nameEl.className = 'playlist-name';
-    nameEl.textContent = name;
-    const countEl = document.createElement('div');
-    countEl.className = 'playlist-count';
-    countEl.textContent = `${list.length}曲`;
-    meta.appendChild(nameEl);
-    meta.appendChild(countEl);
-    li.appendChild(img);
-    li.appendChild(meta);
-    li.addEventListener('click', onClick);
-    listEl.appendChild(li);
-  };
-  addRow('すべての曲', groupTracks, () => openGenreAlbumTracks('すべての曲', groupTracks));
-  albums.forEach((a) => addRow(a, groups.get(a), () => openGenreAlbumTracks(a, groups.get(a))));
+  const toRow = (name, list, onClick) => ({
+    name,
+    count: list.length,
+    artUrl: getThumbUrl(list.find(t => t.artworkBlob) || list[0]),
+    section: sectionOf(keyOf(name)),
+    onClick,
+  });
+  fillGroupRows(listEl, [
+    toRow('すべての曲', groupTracks, () => openGenreAlbumTracks('すべての曲', groupTracks)),
+    ...albums.map(a => toRow(a, groups.get(a), () => openGenreAlbumTracks(a, groups.get(a)))),
+  ]);
 }
 
 function openGenreAlbumTracks(albumName, list) {
@@ -804,7 +826,9 @@ function renderGenreSubFilter(groupTracks) {
     const k = originKey(t);
     return k ? selOrigins.has(k) : selGenres.has(genreLabel(t));
   };
-  const currentList = () => (noSelection() ? groupTracks : groupTracks.filter(isSelected));
+  // インデックスで飛べるように、曲名(読みがあれば読み)順に並べる
+  const currentList = () => (noSelection() ? groupTracks : groupTracks.filter(isSelected))
+    .slice().sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
   const toggle = (set, v) => { if (set.has(v)) set.delete(v); else set.add(v); };
   const makeChip = (text, active, onClick) => {
     const chip = document.createElement('div');
@@ -871,6 +895,66 @@ function getArtworkUrl(track) {
   const url = track.artworkBlob ? URL.createObjectURL(track.artworkBlob) : 'icons/default-artwork.png';
   artworkUrlCache.set(track.id, url);
   return url;
+}
+
+// 一覧用のジャケット(小さな画像)。無ければ元画像で代用し、それも無ければ既定画像
+function getThumbUrl(track) {
+  if (!track) return 'icons/default-artwork.png';
+  if (thumbUrlCache.has(track.id)) return thumbUrlCache.get(track.id);
+  const blob = thumbMap.get(track.id);
+  if (!blob) return getArtworkUrl(track);
+  const url = URL.createObjectURL(blob);
+  thumbUrlCache.set(track.id, url);
+  return url;
+}
+
+// 元のジャケット画像から、一覧用の小さな正方形(JPEG)を作る。一覧の小さな表示に、大きな画像を毎回展開しなくて済む
+async function makeThumb(blob) {
+  const size = 120;
+  const bmp = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const side = Math.min(bmp.width, bmp.height);
+  canvas.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, size, size);
+  if (bmp.close) bmp.close();
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+}
+
+async function saveThumb(track) {
+  if (!track.artworkBlob || thumbMap.has(track.id)) return false;
+  try {
+    const thumb = await makeThumb(track.artworkBlob);
+    if (!thumb) return false;
+    await DB.putThumb(track.id, thumb);
+    thumbMap.set(track.id, thumb);
+    return true;
+  } catch (e) {
+    console.error('サムネイル作成失敗:', track.title, e);
+    return false;
+  }
+}
+
+// 起動後に、サムネイルの無い曲(以前の版で取り込んだ曲など)の分を、少しずつ裏で作る
+let isMigratingThumbs = false;
+async function migrateThumbs() {
+  if (isMigratingThumbs) return;
+  isMigratingThumbs = true;
+  let made = 0;
+  const todo = tracks.filter(t => t.artworkBlob && !thumbMap.has(t.id));
+  for (let i = 0; i < todo.length; i += 10) {
+    const results = await Promise.all(todo.slice(i, i + 10).map(saveThumb));
+    made += results.filter(Boolean).length;
+    await new Promise(r => setTimeout(r, 30)); // 操作の邪魔にならないよう、間を空ける
+  }
+  isMigratingThumbs = false;
+  if (made > 0) {
+    // 作れた分を、表示中の一覧へ反映する
+    document.querySelectorAll('.track-item').forEach((el) => {
+      const t = tracks.find(x => String(x.id) === el.dataset.trackId);
+      if (t && thumbMap.has(t.id)) el.querySelector('.track-artwork').src = getThumbUrl(t);
+    });
+    markLibraryChanged(); // 年代/ジャンル/アーティスト一覧は、次に開くときに作り直す
+  }
 }
 
 function renderTrackList(filter = '') {
@@ -1039,7 +1123,7 @@ const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => HTML_ES
 function trackItemHTML(track) {
   const playing = currentTrack && currentTrack.id === track.id;
   return `<li class="track-item${playing ? ' playing' : ''}" data-track-id="${track.id}" data-section="${esc(sectionOf(trackSortKey(track)))}">` +
-    `<img class="track-artwork" loading="lazy" decoding="async" src="${getArtworkUrl(track)}" alt="">` +
+    `<img class="track-artwork" loading="lazy" decoding="async" src="${getThumbUrl(track)}" alt="">` +
     `<div class="track-meta"><div class="track-title">${esc(track.title)}</div><div class="track-artist">${esc(track.artist)}</div></div>` +
     `<button class="track-menu-btn">⋯</button></li>`;
 }
@@ -1136,9 +1220,13 @@ async function openTrackActionSheet(track) {
 async function deleteTrackFromLibrary(trackId) {
   if (!confirm('この曲をライブラリから削除しますか?')) return;
   await DB.deleteTrack(trackId);
+  await DB.deleteThumb(trackId);
+  thumbMap.delete(trackId);
+  thumbUrlCache.delete(trackId);
   tracks = tracks.filter(t => t.id !== trackId);
   playlists.forEach(p => { p.trackIds = p.trackIds.filter(id => id !== trackId); });
   for (const p of playlists) await DB.updatePlaylist(p);
+  markLibraryChanged();
   renderTrackList(document.getElementById('search-input').value.trim());
   renderPlaylistList();
 }
@@ -1153,7 +1241,7 @@ function renderPlaylistList() {
     const firstTrack = tracks.find(t => t.id === pl.trackIds[0]);
     const img = document.createElement('img');
     img.className = 'playlist-artwork';
-    img.src = firstTrack ? getArtworkUrl(firstTrack) : 'icons/default-artwork.png';
+    img.src = firstTrack ? getThumbUrl(firstTrack) : 'icons/default-artwork.png';
     const meta = document.createElement('div');
     meta.className = 'track-meta';
     const nameEl = document.createElement('div');
@@ -1326,7 +1414,7 @@ function updateNowPlayingUI() {
   document.getElementById('np-artwork').src = getArtworkUrl(currentTrack);
   document.getElementById('np-title').textContent = currentTrack.title;
   document.getElementById('np-artist').textContent = currentTrack.artist;
-  document.getElementById('mini-artwork').src = getArtworkUrl(currentTrack);
+  document.getElementById('mini-artwork').src = getThumbUrl(currentTrack);
   document.getElementById('mini-title').textContent = currentTrack.title;
   document.getElementById('mini-artist').textContent = currentTrack.artist;
   // 歌詞がある曲は既定で歌詞を表示、無い曲はジャケット表示に戻す

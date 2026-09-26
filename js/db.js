@@ -1,6 +1,6 @@
 // IndexedDB ラッパー: 曲データ(音声Blob/アートワーク/歌詞)とプレイリストを永続化する
 const DB_NAME = 'MyMusicDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // 2: 一覧用サムネイルの保存領域(thumbs)を追加
 let dbPromise = null;
 
 function openDB() {
@@ -13,6 +13,9 @@ function openDB() {
         const store = db.createObjectStore('tracks', { keyPath: 'id', autoIncrement: true });
         store.createIndex('title', 'title', { unique: false });
         store.createIndex('addedAt', 'addedAt', { unique: false });
+      }
+      if (!db.objectStoreNames.contains('thumbs')) {
+        db.createObjectStore('thumbs'); // キー = 曲のid、値 = 小さなジャケット画像(Blob)
       }
       if (!db.objectStoreNames.contains('playlists')) {
         db.createObjectStore('playlists', { keyPath: 'id', autoIncrement: true });
@@ -55,6 +58,20 @@ const DB = {
   async updateTrack(track) {
     const store = await tx('tracks', 'readwrite');
     return promisifyRequest(store.put(track));
+  },
+  // ---- 一覧用サムネイル(曲データ本体とは別に保存する。曲データを書き換えずに済む) ----
+  async getAllThumbs() {
+    const store = await tx('thumbs', 'readonly');
+    const [keys, values] = await Promise.all([promisifyRequest(store.getAllKeys()), promisifyRequest(store.getAll())]);
+    return new Map(keys.map((k, i) => [k, values[i]]));
+  },
+  async putThumb(id, blob) {
+    const store = await tx('thumbs', 'readwrite');
+    return promisifyRequest(store.put(blob, id));
+  },
+  async deleteThumb(id) {
+    const store = await tx('thumbs', 'readwrite');
+    return promisifyRequest(store.delete(id));
   },
   async addPlaylist(playlist) {
     const store = await tx('playlists', 'readwrite');

@@ -342,3 +342,9 @@ html, body {
 
 /* 画面外の行は描画・レイアウトを省略して、曲が多くても軽くする */
 .track-item { content-visibility: auto; contain-intrinsic-size: auto 63px; }
+
+/* 画面の切り替えを速くする: 見えていない画面を display:none で破棄せず、描画だけ省略して表示計算(レイアウト)を保つ。
+   曲が多い一覧の作り直しを、切り替えのたびに行わずに済む。未対応のブラウザでは従来どおり display:none */
+@supports (content-visibility: hidden) {
+  .view:not(.active) { display: flex; content-visibility: hidden; visibility: hidden; pointer-events: none; }
+}
