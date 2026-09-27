@@ -2415,6 +2415,32 @@ async function mergeDuplicates() {
   alert(`${removeCount}曲の重複をまとめました`);
 }
 
+// ===== 診断情報(不具合の原因を調べるために、画面の状態をそのまま表示する) =====
+async function showDiagnostics() {
+  const out = [];
+  out.push(`バージョン: ${APP_VERSION}`);
+  out.push(`曲: ${tracks.length}曲 / プレイリスト: ${playlists.length}件`);
+  const pl = await DB.getAllPlaylists();
+  out.push('--- プレイリスト(保存されているもの) ---');
+  pl.forEach(p => out.push(`  id=${p.id} 「${p.name}」 ${p.trackIds.length}曲`));
+  out.push('--- 一覧の並び(端末に保存) ---');
+  out.push('  ' + (localStorage.getItem(PLAYLIST_ORDER_KEY) || '(なし)'));
+  out.push('--- 季節の名前(変更したもの) ---');
+  out.push('  ' + JSON.stringify(Settings.get('seasonLabels') || {}));
+  out.push('--- 今のプレイリスト画面の行 ---');
+  const wasActive = document.getElementById('view-playlists').classList.contains('active');
+  document.querySelectorAll('#playlist-list li').forEach((li, i) => {
+    const name = li.querySelector('.playlist-name');
+    const count = li.querySelector('.playlist-count');
+    out.push(`  ${i + 1}. [${li.dataset.key}] ${name ? name.textContent : ''} / ${count ? count.textContent : ''}${li.querySelector('.track-menu-btn') ? ' / ⋯あり' : ''}`);
+  });
+  if (!wasActive) out.push('  (プレイリスト画面を開いていないため、表示は古い可能性があります)');
+  out.push('--- 予定される行(プログラム上の一覧) ---');
+  orderedPlaylistItems().forEach((it, i) => out.push(`  ${i + 1}. [${playlistItemKey(it)}]`));
+  out.push(`playlist-list の数: ${document.querySelectorAll('#playlist-list').length}`);
+  document.getElementById('diag-output').textContent = out.join('\n');
+}
+
 // ===== 設定画面 =====
 let settingsUIRefresh = null;
 function bindSettings() {
@@ -2437,6 +2463,7 @@ function bindSettings() {
   scBox.addEventListener('change', () => { Settings.set('soundCheck', scBox.checked); onAudioSettingsChanged(); });
   $('btn-analyze-loudness').addEventListener('click', analyzeAllLoudness);
   $('btn-merge-duplicates').addEventListener('click', mergeDuplicates);
+  $('btn-diagnostics').addEventListener('click', showDiagnostics);
   $('btn-backup-export').addEventListener('click', async () => {
     try {
       const r = await Backup.exportFile();
