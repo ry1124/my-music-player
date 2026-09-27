@@ -217,7 +217,8 @@ function bindUIEvents() {
     btnReorder.textContent = playlistEditMode ? '完了' : '並び替え';
     renderPlaylistList();
   });
-  document.getElementById('btn-back-playlists').addEventListener('click', () => showView('view-playlists'));
+  document.getElementById('btn-back-playlists').addEventListener('click', () => showView(playlistDetailBackView));
+  document.getElementById('btn-back-season-folder').addEventListener('click', () => showView('view-playlists'));
   document.getElementById('btn-queue').addEventListener('click', openQueue);
   bindSettings();
   ['track-list', 'group-detail-list', 'playlist-detail-list'].forEach(id => bindSwipeToPlayNext(document.getElementById(id)));
@@ -1577,6 +1578,7 @@ const isEditableListId = (id) => typeof id === 'number' || !!seasonDefByListId(i
 const ALL_LIST_DEFS = () => [
   { key: 'fav', label: 'お気に入りの曲' },
   ...AUTO_LISTS.map(d => ({ key: 'auto:' + d.key, label: d.label })),
+  { key: 'seasonFolder', label: '季節の曲' },
   ...SEASONS.map(d => ({ key: 'season:' + d.key, label: d.label })),
 ];
 // 保存されている名前(未設定なら既定の名前)。他の一覧の名前と見比べるためのもので、そのままでは使わない
@@ -1660,12 +1662,40 @@ async function setTrackSeason(track) {
   if (isPlaylistDetailActive() && typeof currentPlaylistId === 'string') openPlaylistDetail(currentPlaylistId);
 }
 
+// 「季節の曲」フォルダの中: 春夏秋冬・クリスマスを、1つずつの行にして出す(ジャンルのアルバム一覧と同じ考え方)
+function openSeasonFolder() {
+  renderSeasonFolderList();
+  showView('view-season-folder');
+}
+function renderSeasonFolderList() {
+  const listEl = document.getElementById('season-folder-list');
+  listEl.innerHTML = '';
+  SEASONS.forEach((def) => {
+    const list = tracks.filter(t => seasonOf(t) === def.key).sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
+    const li = document.createElement('li');
+    li.className = 'playlist-item';
+    const img = document.createElement('img');
+    img.className = 'playlist-artwork';
+    img.src = list.length ? getThumbUrl(list.find(t => t.artworkBlob) || list[0]) : 'icons/default-artwork.png';
+    const meta = document.createElement('div');
+    meta.className = 'track-meta';
+    meta.innerHTML = `<div class="playlist-name">${esc(seasonLabel(def))}</div><div class="playlist-count">${list.length}曲(自動)</div>`;
+    const more = document.createElement('button');
+    more.className = 'track-menu-btn';
+    more.textContent = '⋯';
+    more.addEventListener('click', (e) => { e.stopPropagation(); openListActionSheet('season:' + def.key); });
+    li.append(img, meta, more);
+    li.addEventListener('click', () => openPlaylistDetail('season:' + def.key, 'view-season-folder'));
+    listEl.appendChild(li);
+  });
+}
+
 // ===== プレイリスト =====
 // 春夏秋冬とプレイリストを、まとめて好きな順に並べられる。順番(キーの配列)は端末に保存する
 const PLAYLIST_ORDER_KEY = 'playlistOrder';
 let playlistEditMode = false;
 
-function playlistItemKey(item) { return item.fav ? 'fav' : item.auto ? 'auto:' + item.auto.key : item.season ? 'season:' + item.season.key : 'pl:' + item.pl.id; }
+function playlistItemKey(item) { return item.fav ? 'fav' : item.auto ? 'auto:' + item.auto.key : item.seasonFolder ? 'seasonFolder' : 'pl:' + item.pl.id; }
 
 function orderedPlaylistItems() {
   // 標準の並び: プレイリスト(作成が新しい順。旧版で並べ替えた順があればそれ) → 春夏秋冬
@@ -1678,7 +1708,7 @@ function orderedPlaylistItems() {
       if (oa !== ob) return oa === Infinity ? 1 : ob === Infinity ? -1 : oa - ob;
       return b.createdAt - a.createdAt;
     }).map(pl => ({ pl })),
-    ...SEASONS.map(d => ({ season: d })),
+    { seasonFolder: true },
   ];
   let saved = [];
   try { saved = JSON.parse(localStorage.getItem(PLAYLIST_ORDER_KEY)) || []; } catch (e) { /* 保存できない環境では標準の並び */ }
@@ -1688,15 +1718,11 @@ function orderedPlaylistItems() {
   // 並び替えた後に作ったプレイリストなど、順が決まっていないものは、いちばん上に出す
   const fresh = defaults.filter(it => byKey.has(playlistItemKey(it)));
   // 新しく増えた春夏秋冬の仲間(クリスマス)は、冬の直後に入れる。それ以外(新しいプレイリスト)は一番上
-  const freshSeasons = fresh.filter(it => it.season);
-  const freshAutos = fresh.filter(it => it.auto);
-  const top = fresh.filter(it => !it.season && !it.auto);
-  const fi = savedItems.findIndex(it => it.fav); // 自動の一覧は、お気に入りの曲の直後に入れる
-  if (fi >= 0) savedItems.splice(fi + 1, 0, ...freshAutos);
-  else top.push(...freshAutos);
-  const wi = savedItems.findIndex(it => it.season && it.season.key === 'winter');
-  if (wi >= 0) savedItems.splice(wi + 1, 0, ...freshSeasons);
-  else top.push(...freshSeasons);
+  const freshAutoLike = fresh.filter(it => it.auto || it.seasonFolder); // 「季節の曲」フォルダも、自動の一覧の仲間として扱う
+  const top = fresh.filter(it => !it.auto && !it.seasonFolder);
+  const fi = savedItems.findIndex(it => it.fav); // 自動の一覧・季節の曲フォルダは、お気に入りの曲の直後に入れる
+  if (fi >= 0) savedItems.splice(fi + 1, 0, ...freshAutoLike);
+  else top.push(...freshAutoLike);
   return [...top, ...savedItems];
 }
 
@@ -1726,11 +1752,11 @@ function renderPlaylistList() {
       name = listLabel('fav');
       countText = `${list.length}曲`;
       open = () => openPlaylistDetail('fav');
-    } else if (item.season) {
-      list = bySeason.get(item.season.key) || [];
-      name = seasonLabel(item.season);
+    } else if (item.seasonFolder) {
+      list = SEASONS.flatMap(d => bySeason.get(d.key) || []);
+      name = listLabel('seasonFolder');
       countText = `${list.length}曲(自動)`;
-      open = () => openPlaylistDetail('season:' + item.season.key);
+      open = () => openSeasonFolder();
     } else {
       list = item.pl.trackIds.map(id => byId.get(id)).filter(Boolean);
       name = item.pl.name;
@@ -1873,8 +1899,10 @@ async function createPlaylistPrompt() {
   renderPlaylistList();
 }
 
-function openPlaylistDetail(playlistId) {
+let playlistDetailBackView = 'view-playlists'; // 「戻る」の行き先。季節の曲フォルダから開いたときは、そちらへ戻す
+function openPlaylistDetail(playlistId, backView) {
   currentPlaylistId = playlistId;
+  playlistDetailBackView = backView || 'view-playlists';
   const isSeason = typeof playlistId === 'string';
   let pl;
   let plTracks;
@@ -1981,6 +2009,7 @@ async function openListActionSheet(key) {
   }
   Settings.set('listLabels', labels);
   renderPlaylistList();
+  if (document.getElementById('view-season-folder').classList.contains('active')) renderSeasonFolderList();
 }
 
 // 自動で決まる一覧(お気に入り・最近追加した曲・季節など)と同じ名前は、見分けがつかなくなるので、付けさせない
