@@ -82,6 +82,15 @@ window.addEventListener('DOMContentLoaded', async () => {
   renderPlaylistList();
   setTimeout(migrateThumbs, 1500); // 起動が落ち着いてから、足りないサムネイルを裏で作る
   setTimeout(prerenderGroupLists, 2000); // 起動が落ち着いてから、年代/ジャンル/アーティストの一覧を先に作る
+  setTimeout(() => { // 春夏秋冬の判定を、空き時間に少しずつ済ませておく(プレイリスト画面を初めて開くときに待たされないように)
+    let i = 0;
+    const step = () => {
+      const end = Math.min(tracks.length, i + 200);
+      for (; i < end; i++) seasonOf(tracks[i]);
+      if (i < tracks.length) setTimeout(step, 30);
+    };
+    step();
+  }, 3000);
   setupIcons();
   setupIndexBar();
   showView('view-library'); // 起動直後の画面でもインデックスバーの表示状態を反映
@@ -1407,9 +1416,11 @@ function updateFavButton() {
   btn.classList.toggle('on', on);
 }
 
+const isPlaylistDetailActive = () => document.getElementById('view-playlist-detail').classList.contains('active');
+
 async function openTrackActionSheet(track) {
   const options = [track.favorite ? 'お気に入りから外す' : 'お気に入りに追加', '次に再生', '最後に再生', 'プレイリストに追加', '曲情報を編集', '季節を設定(春夏秋冬)', '歌詞ファイルを読み込む', '歌詞をネットで再検索'];
-  if (isEditableListId(currentPlaylistId)) options.push('このプレイリストから削除');
+  if (isPlaylistDetailActive() && isEditableListId(currentPlaylistId)) options.push('このプレイリストから削除'); // プレイリストの画面を開いているときだけ(ライブラリなどでは出さない)
   options.push('ライブラリから削除');
   const idx = await showChoiceSheet(track.title, options);
   if (idx < 0) return;
@@ -1440,10 +1451,24 @@ async function refetchLyrics(track) {
   }
 }
 
+// 削除した曲を、再生待ちから外す(現在再生中の曲は、そのまま最後まで鳴る)
+function removeFromQueues(id) {
+  let removedBefore = 0;
+  currentQueue = currentQueue.filter((qid, i) => {
+    const keep = qid !== id || (currentTrack && currentTrack.id === id && i === currentIndex);
+    if (!keep && i < currentIndex) removedBefore++;
+    return keep;
+  });
+  currentIndex -= removedBefore;
+  baseQueue = baseQueue.filter(qid => qid !== id);
+  renderQueueIfOpen();
+}
+
 async function deleteTrackFromLibrary(trackId) {
   if (!confirm('この曲をライブラリから削除しますか?')) return;
   await DB.deleteTrack(trackId);
   await DB.deleteThumb(trackId);
+  removeFromQueues(trackId);
   thumbMap.delete(trackId);
   thumbUrlCache.delete(trackId);
   tracks = tracks.filter(t => t.id !== trackId);
@@ -1541,7 +1566,7 @@ async function setTrackSeason(track) {
   else delete track.season;
   await DB.updateTrack(track);
   renderPlaylistList();
-  if (typeof currentPlaylistId === 'string') openPlaylistDetail(currentPlaylistId);
+  if (isPlaylistDetailActive() && typeof currentPlaylistId === 'string') openPlaylistDetail(currentPlaylistId);
 }
 
 // ===== プレイリスト =====
@@ -1935,6 +1960,7 @@ function playTrackById(id, queueIds) {
 }
 
 let playCounted = false; // 今の再生を、再生回数に数えたか
+let jointDisabled = false;  // 2つめの要素で再生できなかった端末では、その起動中は重ねを使わない
 let jointBusy = false;      // 曲の重ね(クロスフェード/ギャップレス)の最中
 let jointOldEl = null;      // 重ねの最中に、消えていく方の要素
 let jointStartTimer = null; // ギャップレス: 曲の終わりの直前に、次の曲を始める予約
@@ -1953,6 +1979,7 @@ function setSource(el, track) {
 // index を渡すと、再生待ちの中のその位置として扱う(同じ曲が2つあっても取り違えない)
 // opts.joint: 曲の重ね。opts.el の要素で新しい曲を始め、今の曲を opts.fadeSec 秒かけて消す
 function loadAndPlay(track, index, opts = {}) {
+  const prev = { track: currentTrack, index: currentIndex };
   currentTrack = track;
   playCounted = false;
   currentIndex = index !== undefined ? index : currentQueue.indexOf(track.id);
@@ -1978,7 +2005,9 @@ function loadAndPlay(track, index, opts = {}) {
   } else {
     AudioEngine.setFade(el, 1);
   }
-  el.play().catch(() => {});
+  const started = el.play();
+  if (opts.joint && started && started.catch) started.catch(() => abortJoint(el, prev));
+  else if (started && started.catch) started.catch(() => {});
   updateNowPlayingUI();
   if (opts.joint && isFinite(el.duration)) document.getElementById('np-duration').textContent = formatTime(el.duration);
   updateMediaSession();
@@ -2096,6 +2125,30 @@ function nextQueueIndex() {
 }
 const otherElement = () => (audioEl === audioA ? audioB : audioA);
 
+// 次の曲を、2つめの要素で鳴らせなかったとき(iPhoneなどで、画面を触らずに始められない場合)。元の曲に戻して、今までどおりの切り替えにする
+function abortJoint(newEl, prev) {
+  const oldEl = jointOldEl || otherElementOf(newEl);
+  if (audioEl !== newEl) return; // すでに別の操作で切り替わっていれば、何もしない
+  jointDisabled = true;
+  clearTimeout(jointEndTimer); jointEndTimer = null;
+  jointOldEl = null;
+  jointBusy = false;
+  newEl.pause();
+  AudioEngine.setFade(oldEl, 1);
+  audioEl = oldEl;
+  currentTrack = prev.track;
+  currentIndex = prev.index;
+  updateNowPlayingUI();
+  updateMediaSession();
+  refreshPlayingHighlight();
+  renderQueueIfOpen();
+  showToast('この端末では、曲の重ねを使えませんでした。通常の切り替えにします');
+  const ended = oldEl.ended || (isFinite(oldEl.duration) && oldEl.currentTime >= oldEl.duration - 0.05);
+  if (ended) playNext(); // 前の曲が、すでに終わっていたら、そのまま次の曲へ
+  else if (oldEl.paused) oldEl.play().catch(() => {});
+}
+const otherElementOf = (el) => (el === audioA ? audioB : audioA);
+
 function cancelJoint() {
   clearTimeout(jointStartTimer); jointStartTimer = null;
   clearTimeout(jointEndTimer); jointEndTimer = null;
@@ -2130,7 +2183,7 @@ function startJoint(fadeSec) {
 // 再生中の曲の残りが少なくなったら、次の曲を先に読み込み、重ねる(timeupdate から、約0.25秒ごとに呼ぶ)
 function checkJoint() {
   const mode = Settings.get('joint');
-  if (mode === 'off' || jointBusy || !AudioEngine.ready(audioEl) || audioEl.paused || repeatMode === 'one') return;
+  if (mode === 'off' || jointDisabled || jointBusy || !AudioEngine.ready(audioEl) || audioEl.paused || repeatMode === 'one') return;
   const d = audioEl.duration;
   if (!d || !isFinite(d)) return;
   const remaining = d - audioEl.currentTime;
@@ -2163,10 +2216,14 @@ function togglePlayPause() {
 
 function playNext() {
   if (currentQueue.length === 0) return;
-  const nextIndex = nextQueueIndex();
-  if (nextIndex < 0) { audioEl.pause(); return; }
-  const track = tracks.find(t => t.id === currentQueue[nextIndex]);
-  if (track) loadAndPlay(track, nextIndex);
+  let nextIndex = nextQueueIndex();
+  for (let guard = 0; nextIndex >= 0 && guard < currentQueue.length; guard++) {
+    const track = tracks.find(t => t.id === currentQueue[nextIndex]);
+    if (track) { loadAndPlay(track, nextIndex); return; }
+    currentIndex = nextIndex; // ライブラリに無い曲(削除済み)は飛ばす
+    nextIndex = nextQueueIndex();
+  }
+  audioEl.pause();
 }
 
 function playPrev() {
@@ -2308,7 +2365,9 @@ async function openQueueRowMenu(pos) {
   const idx = await showChoiceSheet('再生待ちの操作', ['再生待ちから削除']);
   if (idx !== 0) return;
   const shown = currentQueue.slice(currentIndex + 1, currentIndex + 1 + QUEUE_SHOW_MAX);
-  shown.splice(pos, 1);
+  const removed = shown.splice(pos, 1)[0];
+  const bi = baseQueue.indexOf(removed);
+  if (isShuffle && bi >= 0) baseQueue.splice(bi, 1); // シャッフル中でも、あとで元の並びに戻したときに、また出てこないように
   setUpcoming(shown);
 }
 
