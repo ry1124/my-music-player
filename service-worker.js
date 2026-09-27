@@ -8,6 +8,8 @@ const CORE_ASSETS = [
   './css/style.css',
   './js/version.js',
   './js/db.js',
+  './js/settings.js',
+  './js/audio-engine.js',
   './js/app.js',
   './icons/icon-192.png',
   './icons/icon-512.png',

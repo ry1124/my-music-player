@@ -12,6 +12,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="css/style.css">
+<script src="js/settings.js"></script>
 </head>
 <body>
 
@@ -20,7 +21,10 @@
   <!-- ===== ライブラリ画面 ===== -->
   <section id="view-library" class="view active">
     <header class="topbar">
-      <h1>ライブラリ <span id="app-version" class="app-version"></span></h1>
+      <div class="topbar-left">
+        <h1>ライブラリ <span id="app-version" class="app-version"></span></h1>
+        <button id="btn-settings" class="icon-btn settings-btn" title="設定"></button>
+      </div>
       <div class="topbar-actions">
         <button id="btn-rescan-tags" class="icon-btn" title="年代・ジャンル情報を再スキャン">🏷</button>
         <button id="btn-auto-lyrics" class="icon-btn" title="歌詞をネットから自動検索">🔍</button>
@@ -193,6 +197,54 @@
     </div>
   </section>
 
+  <!-- ===== 設定画面 ===== -->
+  <section id="view-settings" class="view">
+    <header class="topbar">
+      <button id="btn-back-settings" class="icon-btn">‹ 戻る</button>
+      <h1>設定</h1>
+      <span class="np-topbar-spacer"></span>
+    </header>
+    <div class="form-body">
+      <div class="settings-section">外観</div>
+      <label class="form-row">画面の色
+        <select id="set-theme">
+          <option value="auto">端末の設定に合わせる</option>
+          <option value="light">ライトモード(白)</option>
+          <option value="dark">ダークモード(黒)</option>
+        </select>
+      </label>
+
+      <div class="settings-section">曲のつなぎ方</div>
+      <label class="form-row">曲と曲の間
+        <select id="set-joint">
+          <option value="off">通常</option>
+          <option value="gapless">ギャップレス(間をあけない)</option>
+          <option value="crossfade">クロスフェード(重ねる)</option>
+        </select>
+      </label>
+      <label id="row-crossfade-sec" class="form-row hidden">重ねる長さ
+        <select id="set-crossfade-sec">
+          <option value="2">2秒</option>
+          <option value="4">4秒</option>
+          <option value="6">6秒</option>
+          <option value="8">8秒</option>
+          <option value="10">10秒</option>
+          <option value="12">12秒</option>
+        </select>
+      </label>
+      <div class="form-note">「通常」以外は、曲を次々に切り替えるための特別な音声処理を使います。使うと、iPhoneの画面ロック中などに音が出ないことがあります。その場合は「通常」に戻してください。</div>
+
+      <div class="settings-section">音量</div>
+      <label class="form-check">音量の自動そろえ<input id="set-soundcheck" type="checkbox"></label>
+      <div class="settings-btn-row"><button id="btn-analyze-loudness" class="settings-action">全曲の音量を解析する</button></div>
+      <div id="loudness-status" class="form-note"></div>
+      <div class="form-note">曲ごとの音量の差を、聞いたときにそろえます(再生する曲は、自動で解析します)。曲のファイルは書き換えません。</div>
+
+      <div class="settings-section">アプリ情報</div>
+      <div id="settings-version" class="form-note"></div>
+    </div>
+  </section>
+
   <!-- ===== ミニプレイヤー ===== -->
   <div id="mini-player" class="mini-player hidden">
     <img id="mini-artwork" class="mini-artwork" src="" alt="">
@@ -233,6 +285,7 @@
 <script src="js/jsmediatags.min.js"></script>
 <script src="js/version.js"></script>
 <script src="js/db.js"></script>
+<script src="js/audio-engine.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
