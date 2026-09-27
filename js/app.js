@@ -1573,14 +1573,26 @@ const SEASONS = [
 ];
 const seasonDefByListId = (id) => (typeof id === 'string' ? SEASONS.find(d => 'season:' + d.key === id) : undefined);
 const isEditableListId = (id) => typeof id === 'number' || !!seasonDefByListId(id);
-const RESERVED_BASE_NAMES = () => ['お気に入りの曲', ...AUTO_LISTS.map(d => d.label)];
-function seasonLabel(def) {
-  const custom = (Settings.get('seasonLabels') || {})[def.key];
-  const n = custom && custom.normalize('NFKC').trim();
-  // 「最近追加した曲」など、自動の一覧と同じ名前に変えてあると、同じ名前の行が2つ並んで紛らわしいので、その名前は使わない
-  if (n && !RESERVED_BASE_NAMES().some(x => x.normalize('NFKC') === n)) return custom;
-  return def.label;
+// 自動で決まる一覧(お気に入り・最近追加した曲など・季節)は、どれも同じしくみで名前を変えられる。名前は listLabels に、一覧のキーごとに保存する
+const ALL_LIST_DEFS = () => [
+  { key: 'fav', label: 'お気に入りの曲' },
+  ...AUTO_LISTS.map(d => ({ key: 'auto:' + d.key, label: d.label })),
+  ...SEASONS.map(d => ({ key: 'season:' + d.key, label: d.label })),
+];
+// 保存されている名前(未設定なら既定の名前)。他の一覧の名前と見比べるためのもので、そのままでは使わない
+function rawListLabel(entry) {
+  const custom = (Settings.get('listLabels') || {})[entry.key];
+  return (custom && custom.trim()) || entry.label;
 }
+// 実際に表示する名前。他の一覧と同じ名前になっていたら(旧版の保存データなど)、紛らわしいので既定の名前に戻す
+function listLabel(key) {
+  const entry = ALL_LIST_DEFS().find(e => e.key === key);
+  if (!entry) return key;
+  const val = rawListLabel(entry).normalize('NFKC');
+  const clash = ALL_LIST_DEFS().some(o => o.key !== key && rawListLabel(o).normalize('NFKC') === val);
+  return clash ? entry.label : rawListLabel(entry);
+}
+function seasonLabel(def) { return listLabel('season:' + def.key); }
 function seasonOrderedTracks(def) {
   const list = tracks.filter(t => seasonOf(t) === def.key).sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
   const order = (Settings.get('seasonOrders') || {})[def.key] || [];
@@ -1706,12 +1718,12 @@ function renderPlaylistList() {
     let list, name, countText, open;
     if (item.auto) {
       list = item.auto.get();
-      name = item.auto.label;
+      name = listLabel('auto:' + item.auto.key);
       countText = `${list.length}曲(自動)`; // 自分で作ったプレイリストと同じ名前でも、見分けがつくように
       open = () => openPlaylistDetail('auto:' + item.auto.key);
     } else if (item.fav) {
       list = favs;
-      name = 'お気に入りの曲';
+      name = listLabel('fav');
       countText = `${list.length}曲`;
       open = () => openPlaylistDetail('fav');
     } else if (item.season) {
@@ -1749,14 +1761,16 @@ function renderPlaylistList() {
       li.appendChild(handle);
     } else {
       li.addEventListener('click', open);
-      if (item.pl || item.season) {
-        // 誤タップで消さないよう、削除は「⋯」を押したメニューの中に置く(季節の一覧は、名前の変更だけ)
-        const more = document.createElement('button');
-        more.className = 'track-menu-btn';
-        more.textContent = '⋯';
-        more.addEventListener('click', (e) => { e.stopPropagation(); if (item.pl) openPlaylistActionSheet(item.pl); else openSeasonActionSheet(item.season); });
-        li.appendChild(more);
-      }
+      // 誤タップで消さないよう、削除は「⋯」を押したメニューの中に置く(お気に入り・自動の一覧・季節は、名前の変更だけ)
+      const more = document.createElement('button');
+      more.className = 'track-menu-btn';
+      more.textContent = '⋯';
+      more.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (item.pl) openPlaylistActionSheet(item.pl);
+        else openListActionSheet(playlistItemKey(item));
+      });
+      li.appendChild(more);
     }
     listEl.appendChild(li);
   });
@@ -1948,29 +1962,31 @@ function closeAddSongs() {
   openPlaylistDetail(currentPlaylistId); // 追加した曲が並んだ状態で、プレイリストに戻る
 }
 
-async function openSeasonActionSheet(def) {
-  const custom = (Settings.get('seasonLabels') || {})[def.key];
-  const options = custom ? ['名前を変更', `名前を元に戻す(${def.label})`] : ['名前を変更'];
-  const idx = await showChoiceSheet(seasonLabel(def), options);
+// お気に入り・自動の一覧・季節、共通の「名前を変更」。exceptKey 以外の全ての一覧と同じ名前にはできない
+async function openListActionSheet(key) {
+  const entry = ALL_LIST_DEFS().find(e => e.key === key);
+  if (!entry) return;
+  const custom = (Settings.get('listLabels') || {})[key];
+  const options = custom ? ['名前を変更', `名前を元に戻す(${entry.label})`] : ['名前を変更'];
+  const idx = await showChoiceSheet(listLabel(key), options);
   if (idx < 0) return;
-  const labels = { ...(Settings.get('seasonLabels') || {}) };
+  const labels = { ...(Settings.get('listLabels') || {}) };
   if (idx === 0) {
-    const name = prompt('新しい名前', seasonLabel(def));
+    const name = prompt('新しい名前', listLabel(key));
     if (name === null || !name.trim()) return;
-    if (reservedListName(name, def.key)) { alert(`「${name.trim()}」は、ほかの一覧と同じ名前です。別の名前にしてください`); return; }
-    labels[def.key] = name.trim();
+    if (reservedListName(name, key)) { alert(`「${name.trim()}」は、ほかの一覧と同じ名前です。別の名前にしてください`); return; }
+    labels[key] = name.trim();
   } else {
-    delete labels[def.key];
+    delete labels[key];
   }
-  Settings.set('seasonLabels', labels);
+  Settings.set('listLabels', labels);
   renderPlaylistList();
 }
 
-// 自動の一覧(お気に入り・最近追加した曲・季節など)と同じ名前は、見分けがつかず、曲が自動では入らない別物になるので、付けさせない
-function reservedListName(name, exceptSeasonKey) {
+// 自動で決まる一覧(お気に入り・最近追加した曲・季節など)と同じ名前は、見分けがつかなくなるので、付けさせない
+function reservedListName(name, exceptKey) {
   const n = name.normalize('NFKC').trim();
-  const others = SEASONS.filter(d => d.key !== exceptSeasonKey);
-  const names = [...RESERVED_BASE_NAMES(), ...others.map(d => d.label), ...others.map(d => seasonLabel(d))];
+  const names = ALL_LIST_DEFS().filter(e => e.key !== exceptKey).map(e => listLabel(e.key));
   return names.some(x => x.normalize('NFKC') === n);
 }
 
@@ -2425,8 +2441,8 @@ async function showDiagnostics() {
   pl.forEach(p => out.push(`  id=${p.id} 「${p.name}」 ${p.trackIds.length}曲`));
   out.push('--- 一覧の並び(端末に保存) ---');
   out.push('  ' + (localStorage.getItem(PLAYLIST_ORDER_KEY) || '(なし)'));
-  out.push('--- 季節の名前(変更したもの) ---');
-  out.push('  ' + JSON.stringify(Settings.get('seasonLabels') || {}));
+  out.push('--- 一覧の名前(変更したもの) ---');
+  out.push('  ' + JSON.stringify(Settings.get('listLabels') || {}));
   out.push('--- 今のプレイリスト画面の行 ---');
   const wasActive = document.getElementById('view-playlists').classList.contains('active');
   document.querySelectorAll('#playlist-list li').forEach((li, i) => {
