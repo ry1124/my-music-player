@@ -332,11 +332,24 @@ html, body {
 
 .view.has-index .track-list, .view.has-index .playlist-list { padding-right: 30px; }
 
+/* あ〜わの一覧が無い画面でも、右端の「⋯」などが画面の端に寄り過ぎてタップしにくくならないよう、細いスクロールバーを付ける(文字送りの機能は無い、見た目だけのもの) */
+.plain-scrollbar {
+  position: fixed; right: 3px; z-index: 20;
+  top: calc(var(--safe-top) + 110px); bottom: calc(130px + var(--safe-bottom));
+  width: 4px; pointer-events: none;
+}
+.plain-scrollbar-thumb { position: absolute; right: 0; width: 4px; min-height: 24px; border-radius: 2px; background: rgba(120, 120, 128, 0.35); }
+:root[data-theme="dark"] .plain-scrollbar-thumb { background: rgba(255, 255, 255, 0.28); }
+.view.has-plain-scrollbar .track-list, .view.has-plain-scrollbar .playlist-list { padding-right: 18px; }
+.view.has-plain-scrollbar .search-bar, .view.has-plain-scrollbar .play-row, .view.has-plain-scrollbar .import-progress { margin-right: 14px; }
+
 /* ===== 白基調の仕上げ ===== */
 .topbar h1 { display: flex; align-items: baseline; white-space: nowrap; }
 .app-version { font-size: 11px; margin-left: 6px; }
 .topbar-actions .icon-btn { padding: 6px 7px; display: flex; align-items: center; }
 .tab-icon { display: flex; }
+/* ミニプレイヤーが出ているときは、一覧の下端がその下に隠れてタップできなくならないよう、余白を広げる */
+body.mini-open .view:not(#view-nowplaying) { padding-bottom: calc(120px + var(--safe-bottom)); }
 .np-open .mini-player, .np-open .tabbar { display: none; }
 .np-open #view-nowplaying { padding-bottom: calc(24px + var(--safe-bottom)); }
 .view.has-index .search-bar, .view.has-index .play-row, .view.has-index .import-progress { margin-right: 26px; }

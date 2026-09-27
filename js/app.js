@@ -130,9 +130,44 @@ function refreshIndexTarget() {
   indexListId = listId;
   document.getElementById('index-bar').classList.toggle('hidden', !listId);
   active.classList.toggle('has-index', !!listId);
+
+  // あ〜わの一覧が出ない画面のうち、一覧を持つ画面には、見た目だけの細いスクロールバーを付ける(あいうえお順の文字送りは無い)
+  const plain = !listId && PLAIN_SCROLL_VIEWS.has(active.id);
+  document.getElementById('plain-scrollbar').classList.toggle('hidden', !plain);
+  active.classList.toggle('has-plain-scrollbar', plain);
+  if (plain) updatePlainScrollbar(active);
+}
+const PLAIN_SCROLL_VIEWS = new Set(['view-playlists', 'view-playlist-detail', 'view-queue', 'view-season-folder', 'view-years', 'view-genres']);
+
+// 見た目だけのスクロールバー(タップして飛ぶ機能は無い)。今の画面のスクロール量から、つまみの位置と大きさを決める
+function updatePlainScrollbar(view) {
+  const bar = document.getElementById('plain-scrollbar');
+  const thumb = document.getElementById('plain-scrollbar-thumb');
+  const trackH = bar.clientHeight;
+  const contentH = view.scrollHeight;
+  const viewH = view.clientHeight;
+  if (contentH <= viewH + 2) { thumb.style.height = `${trackH}px`; thumb.style.top = '0px'; return; }
+  const h = Math.max(24, trackH * (viewH / contentH));
+  const top = (trackH - h) * (view.scrollTop / (contentH - viewH));
+  thumb.style.height = `${h}px`;
+  thumb.style.top = `${top}px`;
+}
+// 今の画面が、見た目だけのスクロールバーの対象なら、位置を描き直す(内容の並び替え・追加などのあとに呼ぶ)
+function refreshPlainScrollbarIfActive() {
+  const active = document.querySelector('.view.active');
+  if (active && active.classList.contains('has-plain-scrollbar')) updatePlainScrollbar(active);
 }
 
 function bindUIEvents() {
+  // 見た目だけのスクロールバー: どの画面をスクロールしても、対象の画面ならつまみを動かす
+  document.querySelectorAll('.view').forEach((view) => {
+    view.addEventListener('scroll', () => {
+      if (!view.classList.contains('has-plain-scrollbar')) return;
+      if (view._plainRaf) return;
+      view._plainRaf = requestAnimationFrame(() => { view._plainRaf = null; updatePlainScrollbar(view); });
+    }, { passive: true });
+  });
+
   const TAB_VIEW_MAP = {
     library: 'view-library',
     years: 'view-years',
@@ -812,6 +847,7 @@ function fillGroupRows(listEl, rows) {
     `<img class="playlist-artwork" loading="lazy" decoding="async" src="${r.artUrl}" alt="">` +
     `<div class="track-meta"><div class="playlist-name">${esc(r.name)}</div><div class="playlist-count">${r.count}曲</div></div></li>`
   ).join('');
+  refreshPlainScrollbarIfActive();
   if (listEl._rowsBound) return;
   listEl._rowsBound = true;
   listEl.addEventListener('click', (e) => {
@@ -1493,6 +1529,7 @@ const isPlaylistDetailActive = () => document.getElementById('view-playlist-deta
 
 async function openTrackActionSheet(track) {
   const options = [track.favorite ? 'お気に入りから外す' : 'お気に入りに追加', '次に再生', '最後に再生', 'プレイリストに追加', '曲情報を編集', '季節を設定(春夏秋冬)', '歌詞ファイルを読み込む', '歌詞をネットで再検索'];
+  if (track.syncedLyrics && track.syncedLyrics.length > 0) options.push('曲の頭の無音からずれを調整'); // 時刻付きの歌詞がある曲だけ
   if (isPlaylistDetailActive() && isEditableListId(currentPlaylistId)) options.push('このプレイリストから削除'); // プレイリストの画面を開いているときだけ(ライブラリなどでは出さない)
   options.push('ライブラリから削除');
   const idx = await showChoiceSheet(track.title, options);
@@ -1506,8 +1543,32 @@ async function openTrackActionSheet(track) {
   else if (label === '季節を設定(春夏秋冬)') setTrackSeason(track);
   else if (label === '歌詞ファイルを読み込む') importLyricsForTrack(track);
   else if (label === '歌詞をネットで再検索') refetchLyrics(track);
+  else if (label === '曲の頭の無音からずれを調整') estimateSilenceOffset(track);
   else if (label === 'このプレイリストから削除') removeTrackFromCurrentPlaylist(track.id);
   else if (label === 'ライブラリから削除') deleteTrackFromLibrary(track.id);
+}
+
+// 曲の頭にある無音の長さを検出し、歌詞の1行目の時刻と比べて、「ずれ」の目安を提案する
+// (イントロの長さが、歌詞データの元になった版と、手元のファイルとで違う場合に有効)
+async function estimateSilenceOffset(track) {
+  const firstLine = (track.syncedLyrics || []).find(l => l.text && l.text.trim());
+  if (!firstLine) { alert('歌詞の1行目が見つかりませんでした'); return; }
+  let silence;
+  try {
+    silence = await AudioEngine.detectLeadSilence(track.fileBlob);
+  } catch (err) {
+    console.error('無音の検出に失敗:', track.title, err);
+    alert('この曲は解析できませんでした(対応していない形式の可能性があります)');
+    return;
+  }
+  const cur = track.lyricOffset || 0;
+  const newOffset = Math.round((firstLine.time - silence) * 10) / 10;
+  if (Math.abs(newOffset - cur) < 0.15) { alert(`曲の頭の無音: 約${silence.toFixed(1)}秒。今の「ずれ」(${cur.toFixed(1)}秒)から、ほとんど変わらないので、調整しませんでした。`); return; }
+  if (!confirm(`曲の頭の無音: 約${silence.toFixed(1)}秒 / 歌詞の1行目: ${firstLine.time.toFixed(1)}秒\n\n「ずれ」を ${cur.toFixed(1)}秒 → ${newOffset.toFixed(1)}秒 に変更します。よろしいですか?\n(あくまで目安です。合わない場合は、あとで「タップで合わせる」で直せます)`)) return;
+  track.lyricOffset = newOffset;
+  await DB.updateTrack(track);
+  if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
+  alert('ずれを調整しました');
 }
 
 // この1曲だけ、曲の長さに合う歌詞をネットで検索し直す(ずれている曲の直し用)
@@ -1687,6 +1748,7 @@ function renderSeasonFolderList() {
     li.append(img, meta, more);
     li.addEventListener('click', () => openPlaylistDetail('season:' + def.key, 'view-season-folder'));
     listEl.appendChild(li);
+    refreshPlainScrollbarIfActive();
   });
 }
 
@@ -1800,6 +1862,7 @@ function renderPlaylistList() {
     }
     listEl.appendChild(li);
   });
+  refreshPlainScrollbarIfActive();
 }
 
 // 右端の「≡」をつかんで上下にドラッグ → 指を離した位置に並べ替える。画面の上下の端に近づくと、自動でスクロールする
@@ -1860,6 +1923,7 @@ function renderSongEditList() {
     `<li class="edit-row" data-track-id="${t.id}"><img class="track-artwork" decoding="async" src="${getThumbUrl(t)}" alt="">` +
     `<div class="track-meta"><div class="track-title">${esc(t.title)}</div><div class="track-artist">${esc(t.artist)}</div></div>` +
     `<div class="drag-handle">≡</div></li>`).join('');
+  refreshPlainScrollbarIfActive();
 }
 // 並び順のプルダウン(タイトル順・アーティスト順 × 昇順・降順)。選ぶと、その順に並べ替えて保存する。ボタンではなくプルダウンにして、誤タップを防ぐ
 async function sortPlaylistSongs(value) {
@@ -2669,6 +2733,7 @@ function renderQueue() {
   document.getElementById('queue-title-next').textContent = `次はこちら(${rest.length}曲)`;
   document.getElementById('queue-list').innerHTML = shown.map((id, i) => byId.get(id) ? queueRowHTML(byId.get(id), i, true) : '').join('');
   document.getElementById('queue-more').textContent = rest.length > shown.length ? `このあと ${rest.length - shown.length}曲が続きます(表示は${QUEUE_SHOW_MAX}曲まで)` : '';
+  refreshPlainScrollbarIfActive();
 }
 function renderQueueIfOpen() {
   if (document.getElementById('view-queue').classList.contains('active')) renderQueue();
@@ -2742,6 +2807,7 @@ function updateNowPlayingUI() {
 
 function showMiniPlayer() {
   document.getElementById('mini-player').classList.remove('hidden');
+  document.body.classList.add('mini-open'); // 一覧の下端が、ミニプレイヤーに隠れてタップできなくならないよう、余白を広げる
 }
 
 // アプリが裏に回る/閉じられる直前にも保存する

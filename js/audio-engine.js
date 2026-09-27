@@ -114,5 +114,36 @@ const AudioEngine = (() => {
     return { gainDb: Math.round(gain * 10) / 10 };
   }
 
-  return { needed, ensure, resume, ready, setTrackGainDb, fade, setFade, analyze };
+  // ---- 曲の頭の無音の長さ(秒)を検出する。歌詞のタイミング調整の目安に使う ----
+  // 無音かどうかは、曲全体の音量から相対的に決める(曲によって元の音量がまちまちなため)
+  async function detectLeadSilence(blob, maxSeconds = 30) {
+    const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!AC) throw new Error('この端末では検出できません');
+    const off = new AC(1, 1, 11025); // 長さは使わない(decodeAudioDataは全体を読み込む)。サンプルレートは検出に十分な粗さに落とす
+    const buf = await off.decodeAudioData(await blob.arrayBuffer());
+    const data = buf.getChannelData(0);
+    const sr = buf.sampleRate;
+    const hop = Math.max(1, Math.round(sr * 0.02)); // 20msごとの区間
+    const limit = Math.min(data.length, Math.round(sr * maxSeconds));
+    const db = [];
+    for (let i = 0; i + hop <= limit; i += hop) {
+      let sum = 0;
+      for (let j = i; j < i + hop; j++) sum += data[j] * data[j];
+      db.push(20 * Math.log10(Math.sqrt(sum / hop) || 1e-8));
+    }
+    if (db.length === 0) return 0;
+    // 「無音」の基準の音量は、曲のいちばん最初(約0.3秒)から決める。曲全体に対する割合では決めない
+    // (曲全体の何割かで決めると、無音の長さが、たまたまその割合に近いときに、正しく検出できないため)
+    const calibN = Math.min(db.length, 15);
+    const calib = db.slice(0, calibN).slice().sort((a, b) => a - b);
+    const floor = calib[Math.floor(calib.length / 2)]; // 最初の約0.3秒の、中央値
+    const threshold = floor + 12; // そこから12dB大きい音が鳴ったら「始まった」とみなす
+    const sustain = 4; // 4区間(約80ms)続けて超えたときだけ採用する(ノイズやクリック音を除く)
+    for (let i = 0; i + sustain <= db.length; i++) {
+      if (db.slice(i, i + sustain).every(v => v > threshold)) return (i * hop) / sr;
+    }
+    return 0;
+  }
+
+  return { needed, ensure, resume, ready, setTrackGainDb, fade, setFade, analyze, detectLeadSilence };
 })();
