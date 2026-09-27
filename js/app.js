@@ -299,11 +299,13 @@ function bindUIEvents() {
 }
 
 // ===== ファイル取り込み(ID3解析) =====
-const IMPORT_CONCURRENCY = 4; // 同時並列処理数(多すぎるとiOS Safariでメモリ逼迫のおそれ)
+const IMPORT_CONCURRENCY = 6; // 同時並列処理数(多すぎるとiOS Safariでメモリ逼迫のおそれ)
 
 function makeSourceKey(file) {
   return `${file.name}_${file.size}_${file.lastModified}`;
 }
+// 更新日時を除いた「名前_大きさ」。LocalSendやiCloudでコピーし直すと更新日時が変わるので、同じ曲を二重に取り込まないために使う
+const sourceKeyBase = (key) => String(key).replace(/_\d+$/, '');
 
 // "1993-05-01" や "(17)Rock" のような表記から、年(4桁)/ジャンル名だけを取り出す
 function extractYear(tags) {
@@ -346,10 +348,25 @@ function parseFileName(fileName) {
   return { artist: m[1].trim(), title: m[2].trim() };
 }
 
+// 取り込み用の読み取り。MP3(ID3v2)は、画像を自前で取り出し、jsmediatagsには文字の情報だけを読ませる(画像まで解析させると数倍遅い)
+const IMPORT_TEXT_TAGS = ['title', 'artist', 'album', 'genre', 'year', 'lyrics', 'TSOT', 'TSOP', 'TSOA', 'TDRC', 'TYER', 'TDAT', 'TST', 'TSP', 'TSA', 'TYE', 'USLT', 'ULT'];
+async function readTagsForImport(file) {
+  let pic = null;
+  try { pic = await FastTags.readPicture(file); } catch (err) { pic = null; }
+  if (pic) return { tags: await readTags(file, IMPORT_TEXT_TAGS), artworkBlob: pic.blob };
+  const tags = await readTags(file); // MP3以外(m4a・flacなど)や、特殊なタグは、今までの読み方
+  return { tags, artworkBlob: pictureToBlob(tags.picture) };
+}
+async function fastDuration(file) {
+  try {
+    const d = await FastTags.mp3Duration(file);
+    if (d) return d;
+  } catch (err) { /* audio要素での読み込みに切り替える */ }
+  return getAudioDuration(file);
+}
+
 async function importOneFile(file, sourceKey, orderHint) {
-  const tags = await readTags(file);
-  const duration = await getAudioDuration(file);
-  const artworkBlob = pictureToBlob(tags.picture);
+  const [{ tags, artworkBlob }, duration] = await Promise.all([readTagsForImport(file), fastDuration(file)]);
   const lyrics = extractLyrics(tags);
   const fromName = parseFileName(file.name);
   const hasArtistTag = !!(tags.artist && tags.artist.trim());
@@ -374,8 +391,7 @@ async function importOneFile(file, sourceKey, orderHint) {
   };
   const id = await DB.addTrack(track);
   track.id = id;
-  await saveThumb(track);
-  return track;
+  return track; // 一覧用の小さな画像は、取り込みが終わってから、裏でまとめて作る(migrateThumbs)
 }
 
 async function handleFilesSelected(fileList) {
@@ -384,15 +400,16 @@ async function handleFilesSelected(fileList) {
   const progressEl = document.getElementById('import-progress');
   progressEl.classList.remove('hidden');
 
-  const existingKeys = new Set(tracks.map(t => t.sourceKey).filter(Boolean));
+  const existingKeys = new Set(tracks.map(t => t.sourceKey).filter(Boolean).map(sourceKeyBase));
   const targets = [];
   let skippedCount = 0;
   for (const file of files) {
     const sourceKey = makeSourceKey(file);
-    if (existingKeys.has(sourceKey)) {
-      skippedCount++;
+    const base = sourceKeyBase(sourceKey);
+    if (existingKeys.has(base)) {
+      skippedCount++; // 名前と大きさが同じなら、同じ曲とみなす
     } else {
-      existingKeys.add(sourceKey); // 同一選択内の重複も先に弾く
+      existingKeys.add(base); // 同一選択内の重複も先に弾く
       targets.push({ file, sourceKey });
     }
   }
@@ -416,31 +433,30 @@ async function handleFilesSelected(fileList) {
       fileName;
   };
 
-  for (let i = 0; i < targets.length; i += IMPORT_CONCURRENCY) {
-    const chunk = targets.slice(i, i + IMPORT_CONCURRENCY);
-    const results = await Promise.all(chunk.map(async ({ file, sourceKey }, idx) => {
+  // 区切りごとに待たず、空いた分から次の曲を始める(遅い曲が1つあっても、全体が止まらない)
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < targets.length) {
+      const i = nextIndex++;
+      const { file, sourceKey } = targets[i];
       try {
-        const track = await importOneFile(file, sourceKey, i + idx);
-        return track;
+        const track = await importOneFile(file, sourceKey, i);
+        tracks.push(track);
+        addedCount++;
       } catch (err) {
         console.error('取り込み失敗:', file.name, err);
         failures.push(`${file.name}(${err && err.message ? err.message : err})`);
-        return null;
       } finally {
         updateProgress(file.name);
       }
-    }));
-    results.forEach((track) => {
-      if (track) {
-        tracks.push(track);
-        addedCount++;
-      }
-    });
-  }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(IMPORT_CONCURRENCY, targets.length) }, worker));
 
   progressEl.classList.add('hidden');
   markLibraryChanged();
   renderTrackList(document.getElementById('search-input').value.trim());
+  setTimeout(migrateThumbs, 300); // 一覧用の小さな画像を、裏で作る
   const totalSec = Math.round((Date.now() - startTime) / 1000);
   const timeText = totalSec >= 60 ? `${Math.floor(totalSec / 60)}分${totalSec % 60}秒` : `${totalSec}秒`;
   alert(`取り込み完了: 新規${addedCount}曲を追加、${skippedCount}曲は追加済みのためスキップ(所要${timeText})` +
@@ -451,14 +467,16 @@ async function handleFilesSelected(fileList) {
 // タグ読み取りに失敗した理由(診断用)。取り込み完了ダイアログに表示する
 let tagReadErrors = [];
 
-function readTags(file) {
+function readTags(file, only) {
   return new Promise((resolve) => {
     if (typeof jsmediatags === 'undefined') {
       tagReadErrors.push(`${file.name}: タグ読取ライブラリ(jsmediatags)が読み込めていません`);
       resolve({});
       return;
     }
-    jsmediatags.read(file, {
+    const reader = new jsmediatags.Reader(file);
+    if (only) reader.setTagsToRead(only);
+    reader.read({
       onSuccess: (tag) => {
         const tags = tag.tags || {};
         if (!tags.title && !tags.artist && !tags.album) {
@@ -1095,8 +1113,8 @@ async function migrateThumbs() {
   isMigratingThumbs = true;
   let made = 0;
   const todo = tracks.filter(t => t.artworkBlob && !thumbMap.has(t.id));
-  for (let i = 0; i < todo.length; i += 10) {
-    const results = await Promise.all(todo.slice(i, i + 10).map(saveThumb));
+  for (let i = 0; i < todo.length; i += 4) {
+    const results = await Promise.all(todo.slice(i, i + 4).map(saveThumb));
     made += results.filter(Boolean).length;
     await new Promise(r => setTimeout(r, 30)); // 操作の邪魔にならないよう、間を空ける
   }
@@ -1682,7 +1700,7 @@ function renderPlaylistList() {
     if (item.auto) {
       list = item.auto.get();
       name = item.auto.label;
-      countText = `${list.length}曲`;
+      countText = `${list.length}曲(自動)`; // 自分で作ったプレイリストと同じ名前でも、見分けがつくように
       open = () => openPlaylistDetail('auto:' + item.auto.key);
     } else if (item.fav) {
       list = favs;
@@ -2265,8 +2283,11 @@ function refreshPlayingHighlight() {
 
 function togglePlayPause() {
   if (!currentTrack) return;
-  if (audioEl.paused) audioEl.play().catch(() => {});
-  else audioEl.pause();
+  if (audioEl.paused) {
+    prepareAudioEngine(); // 前回の続きから再生したときなど、まだ準備していない特別な音声処理を、ここ(画面を触った直後)で始める
+    applyTrackGain(audioEl, currentTrack);
+    audioEl.play().catch(() => {});
+  } else audioEl.pause();
 }
 
 function playNext() {
@@ -2293,6 +2314,89 @@ function playPrev() {
   if (track) loadAndPlay(track, prevIndex);
 }
 
+// ===== 重複した曲をまとめる =====
+// 同じ曲を二重に取り込んでしまった場合(コピーし直したファイルは更新日時が変わり、別の曲として入る)を探して、1つにまとめる
+function normalizeForDup(str) { return String(str || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ''); }
+
+function findDuplicateGroups() {
+  const parent = new Map(tracks.map(t => [t.id, t.id]));
+  const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+  const union = (a, b) => { parent.set(find(a), find(b)); };
+  // 1) ファイルの名前と大きさが同じ  2) 曲名とアーティストが同じで、長さが1.5秒以内
+  const byBase = new Map();
+  const byTitle = new Map();
+  tracks.forEach((t) => {
+    if (t.sourceKey) {
+      const k = sourceKeyBase(t.sourceKey);
+      if (byBase.has(k)) union(byBase.get(k), t.id); else byBase.set(k, t.id);
+    }
+    const tk = `${normalizeForDup(t.title)}|${normalizeForDup(t.artist)}`;
+    if (!byTitle.has(tk)) byTitle.set(tk, []);
+    byTitle.get(tk).push(t);
+  });
+  byTitle.forEach((list) => {
+    for (let i = 1; i < list.length; i++) {
+      for (let j = 0; j < i; j++) {
+        if (Math.abs((list[i].duration || 0) - (list[j].duration || 0)) <= 1.5 && (list[i].duration || list[j].duration)) { union(list[i].id, list[j].id); break; }
+      }
+    }
+  });
+  const groups = new Map();
+  tracks.forEach((t) => { const r = find(t.id); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(t); });
+  return [...groups.values()].filter(g => g.length > 1);
+}
+
+async function mergeDuplicates() {
+  const groups = findDuplicateGroups();
+  if (groups.length === 0) { alert('重複した曲は見つかりませんでした'); return; }
+  const removeCount = groups.reduce((n, g) => n + g.length - 1, 0);
+  const sample = groups.slice(0, 5).map(g => `・${g[0].title}(${g.length}つ)`).join('\n');
+  if (!confirm(`同じ曲が重複しているものが、${groups.length}組(削除される曲: ${removeCount}曲)見つかりました。\n${sample}${groups.length > 5 ? '\n…' : ''}\n\n1つにまとめます。お気に入り・プレイリスト・再生回数・歌詞は、残す曲に引き継ぎます。よろしいですか?`)) return;
+
+  const usage = new Map(); // 曲id → プレイリストに入っている数
+  playlists.forEach(pl => pl.trackIds.forEach(id => usage.set(id, (usage.get(id) || 0) + 1)));
+  const score = (t) => (t.favorite ? 4 : 0) + (usage.get(t.id) || 0) * 3 + (t.playCount ? 2 : 0) + (t.lyrics ? 1 : 0) + (t.artworkBlob ? 1 : 0);
+  const idMap = new Map(); // 消す曲のid → 残す曲のid
+  for (const g of groups) {
+    const keep = g.slice().sort((a, b) => score(b) - score(a) || (a.addedAt || 0) - (b.addedAt || 0))[0];
+    for (const t of g) {
+      if (t === keep) continue;
+      idMap.set(t.id, keep.id);
+      if (t.favorite) keep.favorite = true;
+      keep.playCount = (keep.playCount || 0) + (t.playCount || 0);
+      keep.lastPlayedAt = Math.max(keep.lastPlayedAt || 0, t.lastPlayedAt || 0) || undefined;
+      if (!keep.season && t.season) keep.season = t.season;
+      if (!keep.lyrics && t.lyrics) { keep.lyrics = t.lyrics; keep.syncedLyrics = t.syncedLyrics; keep.lyricOffset = t.lyricOffset; }
+      if (!keep.artworkBlob && t.artworkBlob) keep.artworkBlob = t.artworkBlob;
+    }
+    await DB.updateTrack(keep);
+  }
+  for (const pl of playlists) { // プレイリストの中の、消す曲を、残す曲に置き換える(同じ曲が2回並ばないように)
+    const ids = [];
+    pl.trackIds.forEach((id) => { const nid = idMap.has(id) ? idMap.get(id) : id; if (!ids.includes(nid)) ids.push(nid); });
+    if (ids.length !== pl.trackIds.length || ids.some((id, i) => id !== pl.trackIds[i])) { pl.trackIds = ids; await DB.updatePlaylist(pl); }
+  }
+  const orders = Settings.get('seasonOrders');
+  if (orders) {
+    const fixed = {};
+    Object.entries(orders).forEach(([k, ids]) => { fixed[k] = [...new Set(ids.map(id => (idMap.has(id) ? idMap.get(id) : id)))]; });
+    Settings.set('seasonOrders', fixed);
+  }
+  for (const oldId of idMap.keys()) {
+    await DB.deleteTrack(oldId);
+    await DB.deleteThumb(oldId);
+    thumbMap.delete(oldId);
+    thumbUrlCache.delete(oldId);
+    removeFromQueues(oldId);
+  }
+  tracks = tracks.filter(t => !idMap.has(t.id));
+  markLibraryChanged();
+  renderTrackList(document.getElementById('search-input').value.trim());
+  renderPlaylistList();
+  updateLoudnessStatus();
+  alert(`${removeCount}曲の重複をまとめました`);
+}
+
 // ===== 設定画面 =====
 let settingsUIRefresh = null;
 function bindSettings() {
@@ -2314,6 +2418,7 @@ function bindSettings() {
   secSel.addEventListener('change', () => { Settings.set('crossfadeSec', Number(secSel.value)); onAudioSettingsChanged(); });
   scBox.addEventListener('change', () => { Settings.set('soundCheck', scBox.checked); onAudioSettingsChanged(); });
   $('btn-analyze-loudness').addEventListener('click', analyzeAllLoudness);
+  $('btn-merge-duplicates').addEventListener('click', mergeDuplicates);
   $('btn-backup-export').addEventListener('click', async () => {
     try {
       const r = await Backup.exportFile();
