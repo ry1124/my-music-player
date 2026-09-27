@@ -423,3 +423,11 @@ html, body {
 .form-check input { width: 22px; height: 22px; accent-color: var(--accent); }
 .settings-btn-row { padding: 10px 0; }
 .settings-action { border: 0; border-radius: 10px; padding: 10px 14px; background: var(--surface2); color: var(--accent); font-size: 15px; font-weight: 600; }
+
+/* 右へスワイプ → 次に再生 */
+.track-item { touch-action: pan-y; position: relative; overflow: hidden; }
+.track-item > :not(.swipe-hint) { transition: transform .2s ease; }
+.track-item.swipe-active > :not(.swipe-hint) { transform: translateX(var(--sx, 0px)); transition: none; }
+.swipe-hint { position: absolute; inset: 0; display: flex; align-items: center; padding-left: 18px; background: #af52de; color: #fff; font-size: 15px; font-weight: 700; visibility: hidden; opacity: .75; }
+.swipe-hint.ready { opacity: 1; }
+.track-item.swipe-active .swipe-hint { visibility: visible; }

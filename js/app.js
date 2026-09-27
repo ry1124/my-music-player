@@ -96,6 +96,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   showView('view-library'); // 起動直後の画面でもインデックスバーの表示状態を反映
   bindUIEvents();
   bindAudioEvents();
+  restorePlaybackState();
 });
 
 function registerServiceWorker() {
@@ -219,6 +220,7 @@ function bindUIEvents() {
   document.getElementById('btn-back-playlists').addEventListener('click', () => showView('view-playlists'));
   document.getElementById('btn-queue').addEventListener('click', openQueue);
   bindSettings();
+  ['track-list', 'group-detail-list', 'playlist-detail-list'].forEach(id => bindSwipeToPlayNext(document.getElementById(id)));
   document.getElementById('btn-edit-cancel').addEventListener('click', closeEditTrack);
   document.getElementById('btn-edit-save').addEventListener('click', saveEditTrack);
   document.getElementById('btn-back-queue').addEventListener('click', () => showView('view-nowplaying'));
@@ -1247,6 +1249,58 @@ function setupIndexBar() {
 }
 
 // ===== 一覧の先頭に置く「再生 / シャッフル」ボタン(Apple Musicと同様) =====
+// ===== 前回の続きから再生: 曲・再生位置・再生待ち・シャッフル/リピートを覚えておく =====
+const PLAYBACK_KEY = 'mmPlayback';
+let lastPlaybackSave = 0;
+function savePlaybackState(force) {
+  if (!currentTrack) return;
+  const now = Date.now();
+  if (!force && now - lastPlaybackSave < 5000) return;
+  lastPlaybackSave = now;
+  try {
+    localStorage.setItem(PLAYBACK_KEY, JSON.stringify({
+      trackId: currentTrack.id, pos: audioEl.currentTime || 0,
+      queue: currentQueue, base: baseQueue, index: currentIndex, shuffle: isShuffle, repeat: repeatMode,
+    }));
+  } catch (e) { /* 保存できなくても、再生には影響しない */ }
+}
+
+function setRepeatUI() {
+  const btn = document.getElementById('btn-repeat');
+  btn.classList.toggle('active', repeatMode !== 'off');
+  btn.innerHTML = svgIcon(ICON_PATHS[repeatMode === 'one' ? 'repeatOne' : 'repeat'], 24);
+}
+
+// 起動時: 最後に聴いていた曲を、一時停止の状態で用意する(自動では再生しない)。ミニプレイヤーの▶で続きから
+function restorePlaybackState() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(PLAYBACK_KEY)); } catch (e) { /* 無ければ何もしない */ }
+  if (!saved) return;
+  const track = tracks.find(t => t.id === saved.trackId);
+  if (!track) return;
+  const ids = new Set(tracks.map(t => t.id));
+  currentQueue = (saved.queue || []).filter(id => ids.has(id));
+  baseQueue = (saved.base || []).filter(id => ids.has(id));
+  if (!currentQueue.includes(track.id)) { currentQueue = [track.id]; baseQueue = [track.id]; }
+  currentIndex = currentQueue[saved.index] === track.id ? saved.index : currentQueue.indexOf(track.id);
+  isShuffle = !!saved.shuffle;
+  document.getElementById('btn-shuffle').classList.toggle('active', isShuffle);
+  repeatMode = saved.repeat === 'all' || saved.repeat === 'one' ? saved.repeat : 'off';
+  setRepeatUI();
+  currentTrack = track;
+  setSource(audioEl, track);
+  const pos = Number(saved.pos) || 0;
+  audioEl.addEventListener('loadedmetadata', () => {
+    if (pos > 0 && pos < audioEl.duration) audioEl.currentTime = pos; // 続きの位置へ
+  }, { once: true });
+  updateNowPlayingUI();
+  updateMediaSession();
+  showMiniPlayer();
+  refreshPlayingHighlight();
+  setPlayPauseIcon(false);
+  document.getElementById('np-current-time').textContent = formatTime(pos);
+}
+
 function setShuffle(on) {
   isShuffle = on;
   document.getElementById('btn-shuffle').classList.toggle('active', isShuffle);
@@ -2014,6 +2068,7 @@ function loadAndPlay(track, index, opts = {}) {
   showMiniPlayer();
   refreshPlayingHighlight();
   renderQueueIfOpen();
+  savePlaybackState(true);
 }
 
 // ===== 音声の特別な処理(設定): 音量の自動そろえ / ギャップレス / クロスフェード =====
@@ -2259,6 +2314,30 @@ function bindSettings() {
   secSel.addEventListener('change', () => { Settings.set('crossfadeSec', Number(secSel.value)); onAudioSettingsChanged(); });
   scBox.addEventListener('change', () => { Settings.set('soundCheck', scBox.checked); onAudioSettingsChanged(); });
   $('btn-analyze-loudness').addEventListener('click', analyzeAllLoudness);
+  $('btn-backup-export').addEventListener('click', async () => {
+    try {
+      const r = await Backup.exportFile();
+      if (r.ok) showToast(`書き出しました(プレイリスト${r.playlists}件・曲${r.tracks}曲分)`);
+    } catch (err) {
+      console.error('バックアップの書き出しに失敗:', err);
+      alert('書き出しに失敗しました');
+    }
+  });
+  const fileInput = $('backup-file-input');
+  $('btn-backup-import').addEventListener('click', () => { fileInput.value = ''; fileInput.click(); });
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    try {
+      const data = Backup.parse(await file.text());
+      if (!confirm(`バックアップ(${(data.exportedAt || '').slice(0, 10)})から復元します。\n・プレイリスト${data.playlists.length}件(今のプレイリストは、この内容に置き換わります)\n・曲の情報${data.tracks.length}曲分(お気に入り・編集・歌詞など)\n・設定\n曲のファイルは変わりません。よろしいですか?`)) return;
+      const r = await Backup.restore(data);
+      alert(`復元しました。曲の情報は、${r.total}曲中${r.matched}曲が見つかり、反映しました。アプリを再読み込みします`);
+      location.reload();
+    } catch (err) {
+      alert(err.message || '復元に失敗しました');
+    }
+  });
 }
 
 // ===== 曲情報の編集(タイトル・アーティスト・アルバム・ジャンル・年、と並び順用の読み) =====
@@ -2303,6 +2382,56 @@ async function saveEditTrack() {
   if (currentTrack && currentTrack.id === track.id) updateNowPlayingUI();
   renderQueueIfOpen();
   closeEditTrack();
+}
+
+// ===== 曲の行を右へスワイプ → 「次に再生」(Apple Musicと同じ)。ボタンは出さず、一定以上動かして指を離したときだけ実行する =====
+function bindSwipeToPlayNext(listEl) {
+  const THRESH = 72; // このくらい右へ動かして離すと、次に再生に追加する
+  let st = null;
+  let suppressClick = false;
+  listEl.addEventListener('pointerdown', (e) => {
+    const li = e.target.closest('.track-item');
+    if (!li || li.classList.contains('add-row') || !listEl.contains(li) || e.clientX < 24) return; // 画面の左端は、iOSの「戻る」操作と重なるので使わない
+    st = { li, x0: e.clientX, y0: e.clientY, dragging: false, dx: 0 };
+  });
+  listEl.addEventListener('pointermove', (e) => {
+    if (!st) return;
+    const dx = e.clientX - st.x0;
+    const dy = e.clientY - st.y0;
+    if (!st.dragging) {
+      if (dx < -8 || Math.abs(dy) > 12 && Math.abs(dy) > dx) { st = null; return; } // 左や縦の動きは、スクロールなどに任せる
+      if (dx < 8 || dx < Math.abs(dy) * 1.5) return;
+      st.dragging = true;
+      if (!st.li.querySelector('.swipe-hint')) {
+        const hint = document.createElement('div');
+        hint.className = 'swipe-hint';
+        hint.textContent = '＋ 次に再生';
+        st.li.appendChild(hint);
+      }
+      st.li.classList.add('swipe-active');
+      try { st.li.setPointerCapture(e.pointerId); } catch (err) { /* 無視 */ }
+    }
+    st.dx = Math.max(0, Math.min(dx, 150));
+    st.li.style.setProperty('--sx', `${st.dx}px`);
+    st.li.querySelector('.swipe-hint').classList.toggle('ready', st.dx >= THRESH);
+  });
+  const finish = (allowRun) => {
+    if (!st) return;
+    const { li, dragging, dx } = st;
+    st = null;
+    if (!dragging) return;
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 60); // 指を離した直後の click で、曲が再生されないようにする
+    li.classList.remove('swipe-active');
+    li.style.removeProperty('--sx');
+    if (allowRun && dx >= THRESH) {
+      const t = tracks.find(x => String(x.id) === li.dataset.trackId);
+      if (t) enqueue(t, true);
+    }
+  };
+  listEl.addEventListener('pointerup', () => finish(true));
+  listEl.addEventListener('pointercancel', () => finish(false));
+  listEl.addEventListener('click', (e) => { if (suppressClick) { e.stopPropagation(); e.preventDefault(); } }, true);
 }
 
 // ===== 再生待ち(次に再生 / 最後に再生 / 再生待ち画面) =====
@@ -2381,9 +2510,8 @@ function toggleShuffle() {
 
 function cycleRepeat() {
   repeatMode = repeatMode === 'off' ? 'all' : repeatMode === 'all' ? 'one' : 'off';
-  const btn = document.getElementById('btn-repeat');
-  btn.classList.toggle('active', repeatMode !== 'off');
-  btn.innerHTML = svgIcon(ICON_PATHS[repeatMode === 'one' ? 'repeatOne' : 'repeat'], 24);
+  setRepeatUI();
+  savePlaybackState(true);
 }
 
 function shuffleArray(arr, keepFirst) {
@@ -2421,6 +2549,10 @@ function showMiniPlayer() {
   document.getElementById('mini-player').classList.remove('hidden');
 }
 
+// アプリが裏に回る/閉じられる直前にも保存する
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') savePlaybackState(true); });
+window.addEventListener('pagehide', () => savePlaybackState(true));
+
 function bindAudioEvents() {
   // 2つのaudio要素の両方に付けて、今、曲を鳴らしている方のイベントだけ処理する
   const onAudio = (name, fn) => [audioA, audioB].forEach(el => el.addEventListener(name, (e) => { if (el === audioEl) fn(e); }));
@@ -2431,7 +2563,7 @@ function bindAudioEvents() {
     lyricRaf = audioEl.paused ? null : requestAnimationFrame(lyricLoop);
   };
   onAudio('play', () => { setPlayPauseIcon(true); if (lyricRaf === null) lyricRaf = requestAnimationFrame(lyricLoop); });
-  onAudio('pause', () => { clearJointStartTimer(); setPlayPauseIcon(false); if (lyricRaf !== null) { cancelAnimationFrame(lyricRaf); lyricRaf = null; } });
+  onAudio('pause', () => { clearJointStartTimer(); savePlaybackState(true); setPlayPauseIcon(false); if (lyricRaf !== null) { cancelAnimationFrame(lyricRaf); lyricRaf = null; } });
   onAudio('seeked', () => { clearJointStartTimer(); highlightCurrentLyricLine(); });
   onAudio('ended', () => {
     if (repeatMode === 'one') {
@@ -2445,6 +2577,7 @@ function bindAudioEvents() {
   onAudio('timeupdate', () => {
     highlightCurrentLyricLine();
     checkJoint();
+    savePlaybackState(false);
     // 30秒(短い曲は半分)聴いたら、1回再生したことにする → 「最近再生した曲」「よく聴く曲」
     if (currentTrack && !playCounted && audioEl.duration && audioEl.currentTime >= Math.min(30, audioEl.duration / 2)) {
       playCounted = true;

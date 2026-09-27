@@ -22,6 +22,12 @@ const Settings = (() => {
 
   return {
     get: (k) => values[k],
+    getAll: () => JSON.parse(JSON.stringify(values)), // バックアップ用
+    setAll(obj) { // 復元用: 既定値に、渡された値を重ねて保存する
+      values = { ...defaults, ...obj };
+      try { localStorage.setItem(KEY, JSON.stringify(values)); } catch (e) { /* 保存できなければ、今回だけ有効 */ }
+      applyTheme();
+    },
     set(k, v) {
       values[k] = v;
       try { localStorage.setItem(KEY, JSON.stringify(values)); } catch (e) { /* 保存できなくても、今回の起動中は有効 */ }
