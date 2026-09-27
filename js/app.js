@@ -9,6 +9,10 @@ let isShuffle = false;
 let repeatMode = 'off';     // 'off' | 'all' | 'one'
 let seeking = false;
 let currentPlaylistId = null; // プレイリスト詳細画面で表示中のID
+// スリープタイマー(アプリを再起動すると解除される。曲をまたいで数えるので、一時停止中も進む)
+let sleepTimerId = null;        // 時間指定のsetTimeoutのID
+let sleepTimerEndAt = null;     // 止まる予定の時刻(Date.now()と比べる用)
+let sleepTimerEndOfTrack = false; // true: 今の曲が終わったところで止める
 let lastGroupListView = 'view-years'; // 年代/ジャンル詳細画面から「戻る」時にどちらに戻るか
 const artworkUrlCache = new Map(); // trackId -> objectURL(元のジャケット画像)
 const thumbMap = new Map();        // trackId -> 一覧用の小さなジャケット画像(Blob)
@@ -45,6 +49,8 @@ const ICON_PATHS = {
   search: '<path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>',
   doc: '<path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>',
   add: '<path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>',
+  moon: '<path d="M12.3 3a9 9 0 1 0 8.7 12.3 7.3 7.3 0 0 1-8.7-12.3z"/>', // スリープタイマー
+  expand: '<path d="M9 3H3v6h2V5h4V3zm12 0h-6v2h4v4h2V3zM5 15H3v6h6v-2H5v-4zm14 0v4h-4v2h6v-6h-2z"/>', // 歌詞の拡大表示
 };
 
 function setupIcons() {
@@ -56,6 +62,8 @@ function setupIcons() {
   set('btn-repeat', 'repeat', 24);
   set('btn-lyrics-toggle', 'lyrics', 24);
   set('btn-queue', 'tabGenres', 24);
+  set('btn-sleep-timer', 'moon', 20);
+  set('btn-lyrics-expand', 'expand', 16);
   set('mini-playpause', 'play', 28);
   set('mini-next', 'next', 28);
   // タブバー・上部ボタンも単色アイコンにする(白い画面でカラー絵文字が浮かないように)
@@ -325,6 +333,8 @@ function bindUIEvents() {
   document.getElementById('btn-lyrics-toggle').addEventListener('click', toggleLyrics);
   document.getElementById('btn-np-fav').addEventListener('click', () => { if (currentTrack) toggleFavorite(currentTrack); });
   document.getElementById('btn-np-more').addEventListener('click', () => { if (currentTrack) openTrackActionSheet(currentTrack); });
+  document.getElementById('btn-sleep-timer').addEventListener('click', openSleepTimerSheet);
+  document.getElementById('btn-lyrics-expand').addEventListener('click', toggleLyricsExpanded);
 
   const seekBar = document.getElementById('seek-bar');
   seekBar.addEventListener('input', () => { seeking = true; });
@@ -2801,6 +2811,8 @@ function updateNowPlayingUI() {
   // 歌詞がある曲は既定で歌詞を表示、無い曲はジャケット表示に戻す
   const hasLyrics = !!(currentTrack.lyrics || (currentTrack.syncedLyrics && currentTrack.syncedLyrics.length > 0));
   document.getElementById('np-lyrics').classList.toggle('hidden', !hasLyrics);
+  document.getElementById('btn-lyrics-expand').classList.toggle('hidden', !hasLyrics);
+  if (!hasLyrics) setLyricsExpanded(false); // 歌詞が無い曲に切り替わったら、拡大表示も解除する
   lastActiveLyricIdx = -1;
   updateLyricsPane();
 }
@@ -2808,6 +2820,53 @@ function updateNowPlayingUI() {
 function showMiniPlayer() {
   document.getElementById('mini-player').classList.remove('hidden');
   document.body.classList.add('mini-open'); // 一覧の下端が、ミニプレイヤーに隠れてタップできなくならないよう、余白を広げる
+}
+
+// ===== スリープタイマー =====
+function sleepTimerStatusText() {
+  if (sleepTimerEndOfTrack) return 'この曲が終わるまで';
+  if (sleepTimerEndAt) return `あと約${Math.max(1, Math.round((sleepTimerEndAt - Date.now()) / 60000))}分`;
+  return null;
+}
+function updateSleepTimerUI() {
+  document.getElementById('btn-sleep-timer').classList.toggle('active', !!(sleepTimerId || sleepTimerEndOfTrack));
+}
+function clearSleepTimer() {
+  if (sleepTimerId) clearTimeout(sleepTimerId);
+  sleepTimerId = null;
+  sleepTimerEndAt = null;
+  sleepTimerEndOfTrack = false;
+  updateSleepTimerUI();
+}
+function setSleepTimer(minutes) {
+  clearSleepTimer();
+  sleepTimerEndAt = Date.now() + minutes * 60000;
+  sleepTimerId = setTimeout(() => {
+    audioEl.pause();
+    sleepTimerId = null;
+    sleepTimerEndAt = null;
+    updateSleepTimerUI();
+    showToast('スリープタイマーで再生を止めました');
+  }, minutes * 60000);
+  updateSleepTimerUI();
+}
+function setSleepTimerEndOfTrack() {
+  clearSleepTimer();
+  sleepTimerEndOfTrack = true;
+  updateSleepTimerUI();
+}
+async function openSleepTimerSheet() {
+  const status = sleepTimerStatusText();
+  const options = ['15分', '30分', '45分', '60分', '曲の終わりまで'];
+  if (status) options.push('タイマーを解除');
+  const idx = await showChoiceSheet(status ? `スリープタイマー(${status})` : 'スリープタイマー', options);
+  if (idx < 0) return;
+  const label = options[idx];
+  if (label === 'タイマーを解除') { clearSleepTimer(); showToast('スリープタイマーを解除しました'); return; }
+  if (label === '曲の終わりまで') { setSleepTimerEndOfTrack(); showToast('この曲が終わったら再生を止めます'); return; }
+  const minutes = parseInt(label, 10);
+  setSleepTimer(minutes);
+  showToast(`${minutes}分後に再生を止めます`);
 }
 
 // アプリが裏に回る/閉じられる直前にも保存する
@@ -2827,6 +2886,12 @@ function bindAudioEvents() {
   onAudio('pause', () => { clearJointStartTimer(); savePlaybackState(true); setPlayPauseIcon(false); if (lyricRaf !== null) { cancelAnimationFrame(lyricRaf); lyricRaf = null; } });
   onAudio('seeked', () => { clearJointStartTimer(); highlightCurrentLyricLine(); });
   onAudio('ended', () => {
+    if (sleepTimerEndOfTrack) {
+      sleepTimerEndOfTrack = false;
+      updateSleepTimerUI();
+      showToast('スリープタイマーで再生を止めました');
+      return; // 次の曲へは進まず、ここで止まる
+    }
     if (repeatMode === 'one') {
       playCounted = false;
       audioEl.currentTime = 0;
@@ -2883,8 +2948,24 @@ let lastActiveLyricIdx = -1;
 function toggleLyrics() {
   const pane = document.getElementById('np-lyrics');
   pane.classList.toggle('hidden');
-  if (pane.classList.contains('hidden')) document.getElementById('lyric-offset').classList.add('hidden'); // 歌詞を隠すときは調整ボタンも隠す
-  else { lastActiveLyricIdx = -1; updateLyricsPane(); }
+  const hidden = pane.classList.contains('hidden');
+  document.getElementById('btn-lyrics-expand').classList.toggle('hidden', hidden);
+  if (hidden) {
+    document.getElementById('lyric-offset').classList.add('hidden'); // 歌詞を隠すときは調整ボタンも隠す
+    setLyricsExpanded(false);
+  } else {
+    lastActiveLyricIdx = -1;
+    updateLyricsPane();
+  }
+}
+
+// 歌詞の拡大表示(Spotifyのフルスクリーン歌詞のように、歌詞だけを画面いっぱいに大きく出す)
+function setLyricsExpanded(on) {
+  document.body.classList.toggle('lyrics-expanded', on);
+  document.getElementById('btn-lyrics-expand').classList.toggle('active', on);
+}
+function toggleLyricsExpanded() {
+  setLyricsExpanded(!document.body.classList.contains('lyrics-expanded'));
 }
 
 function updateLyricsPane() {

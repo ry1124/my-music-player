@@ -279,6 +279,24 @@ html, body {
 .ctrl-btn.small.active { color: var(--accent); }
 .np-bottom { display: flex; align-items: center; justify-content: space-around; margin-top: 28px; padding: 0 24px; }
 
+/* スリープタイマー(再生画面の上部) */
+.np-sleep-timer { color: var(--text-dim); }
+.np-sleep-timer.active { color: var(--accent); }
+
+/* 歌詞の拡大表示ボタン(ジャケット/歌詞の右上に重ねる) */
+.lyrics-expand-btn {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  width: 30px; height: 30px; border-radius: 50%; padding: 0; border: none;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.32); color: #fff;
+}
+.lyrics-expand-btn.active { background: var(--accent); }
+
+/* 拡大表示中: ジャケットを隠し、歌詞の枠を画面の残りいっぱいに広げて、文字も大きくする */
+body.lyrics-expanded #view-nowplaying .np-artwork-wrap { aspect-ratio: auto; max-height: none; flex: 1 1 auto; }
+body.lyrics-expanded #view-nowplaying .np-artwork { display: none; }
+body.lyrics-expanded #view-nowplaying .np-lyrics { font-size: 23px; line-height: 2.3; padding: 30% 24px; }
+
 @media (min-width: 700px) {
   .np-artwork-wrap { max-width: 420px; }
 }
