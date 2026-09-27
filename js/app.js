@@ -1468,10 +1468,10 @@ const AUTO_LISTS = [
 //  ・名前 = seasonLabels に保存
 // 曲名・アルバム名の言葉から自動で振り分ける。手動で決めた季節(track.season)があればそちらを優先する。'none' = どれでもない
 const SEASONS = [
-  { key: 'spring', label: '春', re: /春|桜|さくら|サクラ|卒業|入学|花見|菜の花|新生活|桃の花|spring|sakura|cherry\s?blossom/gi },
-  { key: 'summer', label: '夏', re: /夏|花火|向日葵|ひまわり|入道雲|夕立|浴衣|蝉|海|サマー|summer|真夏|南国|プール|夏祭/gi },
-  { key: 'autumn', label: '秋', re: /秋|紅葉|コスモス|落ち葉|枯葉|月見|十五夜|銀杏|autumn|fall\b|ハロウィン|halloween/gi },
-  { key: 'winter', label: '冬', re: /冬|雪|winter|snow|粉雪|吹雪|白い息|こたつ/gi },
+  { key: 'spring', label: '春の曲', re: /春|桜|さくら|サクラ|卒業|入学|花見|菜の花|新生活|桃の花|spring|sakura|cherry\s?blossom/gi },
+  { key: 'summer', label: '夏の曲', re: /夏|花火|向日葵|ひまわり|入道雲|夕立|浴衣|蝉|海|サマー|summer|真夏|南国|プール|夏祭/gi },
+  { key: 'autumn', label: '秋の曲', re: /秋|紅葉|コスモス|落ち葉|枯葉|月見|十五夜|銀杏|autumn|fall\b|ハロウィン|halloween/gi },
+  { key: 'winter', label: '冬の曲', re: /冬|雪|winter|snow|粉雪|吹雪|白い息|こたつ/gi },
   { key: 'xmas', label: 'クリスマス', re: /クリスマス|christmas|x'?mas|聖夜|サンタ|ジングルベル|ノエル|きよしこの夜|もろびと|トナカイ|ルドルフ|noel|santa|jingle\s?bells?|silent\s?night|holy\s?night|rudolph|reindeer|sleigh|mistletoe|carols?|deck\s?the\s?halls?|joy\s?to\s?the\s?world|let\s?it\s?snow|winter\s?wonderland|little\s?drummer|first\s?noel|angels\s?we\s?have|hark\s?the|away\s?in\s?a\s?manger|feliz\s?navidad|all\s?i\s?want\s?for|bells?\s?rock|nutcracker|くるみ割り/gi }, // 冬とは別の一覧(クリスマスの曲は冬に入れない)
 ];
 const seasonDefByListId = (id) => (typeof id === 'string' ? SEASONS.find(d => 'season:' + d.key === id) : undefined);
