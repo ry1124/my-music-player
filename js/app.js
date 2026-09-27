@@ -1573,7 +1573,14 @@ const SEASONS = [
 ];
 const seasonDefByListId = (id) => (typeof id === 'string' ? SEASONS.find(d => 'season:' + d.key === id) : undefined);
 const isEditableListId = (id) => typeof id === 'number' || !!seasonDefByListId(id);
-function seasonLabel(def) { return (Settings.get('seasonLabels') || {})[def.key] || def.label; }
+const RESERVED_BASE_NAMES = () => ['お気に入りの曲', ...AUTO_LISTS.map(d => d.label)];
+function seasonLabel(def) {
+  const custom = (Settings.get('seasonLabels') || {})[def.key];
+  const n = custom && custom.normalize('NFKC').trim();
+  // 「最近追加した曲」など、自動の一覧と同じ名前に変えてあると、同じ名前の行が2つ並んで紛らわしいので、その名前は使わない
+  if (n && !RESERVED_BASE_NAMES().some(x => x.normalize('NFKC') === n)) return custom;
+  return def.label;
+}
 function seasonOrderedTracks(def) {
   const list = tracks.filter(t => seasonOf(t) === def.key).sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
   const order = (Settings.get('seasonOrders') || {})[def.key] || [];
@@ -1844,6 +1851,7 @@ function toggleSongEditMode() {
 async function createPlaylistPrompt() {
   const name = prompt('プレイリスト名を入力してください');
   if (!name || !name.trim()) return;
+  if (reservedListName(name)) { alert(`「${name.trim()}」は、自動の一覧と同じ名前です。別の名前にしてください`); return; }
   const playlist = { name: name.trim(), trackIds: [], createdAt: Date.now() };
   const id = await DB.addPlaylist(playlist);
   playlist.id = id;
@@ -1949,6 +1957,7 @@ async function openSeasonActionSheet(def) {
   if (idx === 0) {
     const name = prompt('新しい名前', seasonLabel(def));
     if (name === null || !name.trim()) return;
+    if (reservedListName(name, def.key)) { alert(`「${name.trim()}」は、ほかの一覧と同じ名前です。別の名前にしてください`); return; }
     labels[def.key] = name.trim();
   } else {
     delete labels[def.key];
@@ -1957,9 +1966,18 @@ async function openSeasonActionSheet(def) {
   renderPlaylistList();
 }
 
+// 自動の一覧(お気に入り・最近追加した曲・季節など)と同じ名前は、見分けがつかず、曲が自動では入らない別物になるので、付けさせない
+function reservedListName(name, exceptSeasonKey) {
+  const n = name.normalize('NFKC').trim();
+  const others = SEASONS.filter(d => d.key !== exceptSeasonKey);
+  const names = [...RESERVED_BASE_NAMES(), ...others.map(d => d.label), ...others.map(d => seasonLabel(d))];
+  return names.some(x => x.normalize('NFKC') === n);
+}
+
 async function renamePlaylist(pl) {
   const name = prompt('プレイリストの新しい名前', pl.name);
   if (name === null || !name.trim() || name.trim() === pl.name) return;
+  if (reservedListName(name)) { alert(`「${name.trim()}」は、自動の一覧と同じ名前です。別の名前にしてください`); return; }
   pl.name = name.trim();
   await DB.updatePlaylist(pl);
   renderPlaylistList();
