@@ -1623,11 +1623,17 @@ async function deleteTrackFromLibrary(trackId) {
   renderPlaylistList();
 }
 
-// ===== 自動の一覧(最近追加した曲 / 最近再生した曲 / よく聴く曲) =====
+// ===== 自動の一覧(最近追加した曲 / 最近再生した曲) =====
 const AUTO_LISTS = [
   { key: 'added', label: '最近追加した曲', get: () => tracks.filter(t => t.addedAt).sort((a, b) => b.addedAt - a.addedAt).slice(0, 100) },
   { key: 'played', label: '最近再生した曲', get: () => tracks.filter(t => t.lastPlayedAt).sort((a, b) => b.lastPlayedAt - a.lastPlayedAt).slice(0, 100) },
-  { key: 'most', label: 'よく聴く曲', get: () => tracks.filter(t => t.playCount > 0).sort((a, b) => b.playCount - a.playCount || b.lastPlayedAt - a.lastPlayedAt).slice(0, 100) },
+];
+
+// ===== 令和アニソン / 平成アニソン(ジャンルが「アニメ」で、発売年で振り分ける自動の一覧) =====
+// 令和: 2019年以降 / 平成: 1989〜2018年。年が無い曲や、アニメ以外のジャンルの曲は、どちらにも入らない
+const ERA_LISTS = [
+  { key: 'reiwaAnime', label: '令和アニソン', get: () => tracks.filter(t => originKey(t) === 'anime' && parseInt(t.year, 10) >= 2019) },
+  { key: 'heiseiAnime', label: '平成アニソン', get: () => tracks.filter(t => originKey(t) === 'anime' && parseInt(t.year, 10) >= 1989 && parseInt(t.year, 10) < 2019) },
 ];
 
 // ===== 季節のプレイリスト(春夏秋冬・クリスマス) =====
@@ -1649,6 +1655,7 @@ const isEditableListId = (id) => typeof id === 'number' || !!seasonDefByListId(i
 const ALL_LIST_DEFS = () => [
   { key: 'fav', label: 'お気に入りの曲' },
   ...AUTO_LISTS.map(d => ({ key: 'auto:' + d.key, label: d.label })),
+  ...ERA_LISTS.map(d => ({ key: 'era:' + d.key, label: d.label })),
   { key: 'seasonFolder', label: '季節の曲' },
   ...SEASONS.map(d => ({ key: 'season:' + d.key, label: d.label })),
 ];
@@ -1767,10 +1774,10 @@ function renderSeasonFolderList() {
 const PLAYLIST_ORDER_KEY = 'playlistOrder';
 let playlistEditMode = false;
 
-function playlistItemKey(item) { return item.fav ? 'fav' : item.auto ? 'auto:' + item.auto.key : item.seasonFolder ? 'seasonFolder' : 'pl:' + item.pl.id; }
+function playlistItemKey(item) { return item.fav ? 'fav' : item.auto ? 'auto:' + item.auto.key : item.era ? 'era:' + item.era.key : item.seasonFolder ? 'seasonFolder' : 'pl:' + item.pl.id; }
 
 function orderedPlaylistItems() {
-  // 標準の並び: プレイリスト(作成が新しい順。旧版で並べ替えた順があればそれ) → 春夏秋冬
+  // 標準の並び: プレイリスト(作成が新しい順。旧版で並べ替えた順があればそれ) → 令和/平成アニソン → 春夏秋冬
   const defaults = [
     { fav: true },
     ...AUTO_LISTS.map(d => ({ auto: d })),
@@ -1780,6 +1787,7 @@ function orderedPlaylistItems() {
       if (oa !== ob) return oa === Infinity ? 1 : ob === Infinity ? -1 : oa - ob;
       return b.createdAt - a.createdAt;
     }).map(pl => ({ pl })),
+    ...ERA_LISTS.map(d => ({ era: d })),
     { seasonFolder: true },
   ];
   let saved = [];
@@ -1790,11 +1798,20 @@ function orderedPlaylistItems() {
   // 並び替えた後に作ったプレイリストなど、順が決まっていないものは、いちばん上に出す
   const fresh = defaults.filter(it => byKey.has(playlistItemKey(it)));
   // 新しく増えた春夏秋冬の仲間(クリスマス)は、冬の直後に入れる。それ以外(新しいプレイリスト)は一番上
-  const freshAutoLike = fresh.filter(it => it.auto || it.seasonFolder); // 「季節の曲」フォルダも、自動の一覧の仲間として扱う
-  const top = fresh.filter(it => !it.auto && !it.seasonFolder);
-  const fi = savedItems.findIndex(it => it.fav); // 自動の一覧・季節の曲フォルダは、お気に入りの曲の直後に入れる
-  if (fi >= 0) savedItems.splice(fi + 1, 0, ...freshAutoLike);
-  else top.push(...freshAutoLike);
+  const freshAuto = fresh.filter(it => it.auto); // 自動の一覧は、お気に入りの曲の直後に入れる
+  const freshSeasonFolder = fresh.find(it => it.seasonFolder); // 季節の曲フォルダは、無ければ、令和/平成アニソンの直後に入れる
+  const freshEra = fresh.filter(it => it.era); // 令和/平成アニソンは「季節の曲」フォルダの直前に入れる
+  const top = fresh.filter(it => !it.auto && !it.seasonFolder && !it.era);
+  const fi = savedItems.findIndex(it => it.fav);
+  if (fi >= 0) savedItems.splice(fi + 1, 0, ...freshAuto);
+  else top.push(...freshAuto);
+  const si = savedItems.findIndex(it => it.seasonFolder);
+  if (si >= 0) {
+    savedItems.splice(si, 0, ...freshEra);
+  } else {
+    top.push(...freshEra);
+    if (freshSeasonFolder) top.push(freshSeasonFolder); // 季節の曲フォルダも保存された並びに無いとき(初回起動など)は、ここで一緒に並べる
+  }
   return [...top, ...savedItems];
 }
 
@@ -1819,6 +1836,11 @@ function renderPlaylistList() {
       name = listLabel('auto:' + item.auto.key);
       countText = `${list.length}曲(自動)`; // 自分で作ったプレイリストと同じ名前でも、見分けがつくように
       open = () => openPlaylistDetail('auto:' + item.auto.key);
+    } else if (item.era) {
+      list = item.era.get();
+      name = listLabel('era:' + item.era.key);
+      countText = `${list.length}曲(自動)`;
+      open = () => openPlaylistDetail('era:' + item.era.key);
     } else if (item.fav) {
       list = favs;
       name = listLabel('fav');
@@ -1981,9 +2003,13 @@ function openPlaylistDetail(playlistId, backView) {
   let pl;
   let plTracks;
   const autoDef = AUTO_LISTS.find(d => 'auto:' + d.key === playlistId);
+  const eraDef = ERA_LISTS.find(d => 'era:' + d.key === playlistId);
   if (autoDef) {
     pl = { name: autoDef.label };
     plTracks = autoDef.get(); // 新しい順・回数の多い順のまま出す
+  } else if (eraDef) {
+    pl = { name: listLabel('era:' + eraDef.key) };
+    plTracks = eraDef.get().slice().sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
   } else if (playlistId === 'fav') {
     pl = { name: 'お気に入りの曲' };
     plTracks = tracks.filter(t => t.favorite).sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
@@ -2904,7 +2930,7 @@ function bindAudioEvents() {
     highlightCurrentLyricLine();
     checkJoint();
     savePlaybackState(false);
-    // 30秒(短い曲は半分)聴いたら、1回再生したことにする → 「最近再生した曲」「よく聴く曲」
+    // 30秒(短い曲は半分)聴いたら、1回再生したことにする → 「最近再生した曲」
     if (currentTrack && !playCounted && audioEl.duration && audioEl.currentTime >= Math.min(30, audioEl.duration / 2)) {
       playCounted = true;
       currentTrack.playCount = (currentTrack.playCount || 0) + 1;
