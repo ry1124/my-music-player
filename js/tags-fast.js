@@ -1,7 +1,8 @@
-// 取り込みを速くするための、MP3の高速な読み取り
-//  ・ジャケット画像: ID3v2タグから、画像部分だけを直接取り出す(jsmediatagsで画像まで解析すると、1曲あたり数倍かかる)
+// 取り込みを速くするための、MP3の高速な読み取り(jsmediatagsを使わず、ID3v2タグを自前で1回だけ読む)
+//  ・文字の情報(曲名・アーティスト・アルバム・ジャンル・年・並び替え用の読み・歌詞): フレームを直接デコードする
+//  ・ジャケット画像: ID3v2タグから、画像部分だけを直接取り出す
 //  ・曲の長さ: MP3のヘッダから計算する(audio要素で読み込むより、はるかに速い)
-// どちらも、読めない形式のときは null を返す → 呼び出し側が、今までの方法に切り替える
+// 読めない形式(未同期化タグ・ID3v2以外など)のときは null を返す → 呼び出し側が、jsmediatags/audio要素に切り替える
 const FastTags = (() => {
   const syncsafe = (b, o) => ((b[o] & 0x7f) << 21) | ((b[o + 1] & 0x7f) << 14) | ((b[o + 2] & 0x7f) << 7) | (b[o + 3] & 0x7f);
   const be32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
@@ -11,8 +12,29 @@ const FastTags = (() => {
     return new Uint8Array(await file.slice(0, 10).arrayBuffer());
   }
 
-  // ID3v2 のジャケット画像を { blob } で返す。画像が無ければ { blob: null }。仕組み上読めないとき(未同期化など)は null
-  async function readPicture(file) {
+  // 文字コードの変換(対応していない端末では、コンストラクタが例外を投げるので、呼び出し側でtry/catchする)
+  const DECODERS = {
+    latin1: new TextDecoder('iso-8859-1'),
+    utf16le: new TextDecoder('utf-16le'),
+    utf16be: new TextDecoder('utf-16be'),
+    utf8: new TextDecoder('utf-8'),
+  };
+  // テキストフレームの中身(エンコーディングバイトの次から)を文字列にする。NUL区切り以降(2つ目の値など)は捨てる
+  function decodeText(buf, start, end, enc) {
+    if (start >= end) return '';
+    let s;
+    if (enc === 1) { // UTF-16(BOM付き)
+      if (end - start >= 2 && buf[start] === 0xff && buf[start + 1] === 0xfe) s = DECODERS.utf16le.decode(buf.subarray(start + 2, end));
+      else if (end - start >= 2 && buf[start] === 0xfe && buf[start + 1] === 0xff) s = DECODERS.utf16be.decode(buf.subarray(start + 2, end));
+      else s = DECODERS.utf16le.decode(buf.subarray(start, end)); // BOMが無ければLEとみなす
+    } else if (enc === 2) s = DECODERS.utf16be.decode(buf.subarray(start, end)); // UTF-16BE(BOM無し、v2.4のみ)
+    else if (enc === 3) s = DECODERS.utf8.decode(buf.subarray(start, end)); // UTF-8(v2.4のみ)
+    else s = DECODERS.latin1.decode(buf.subarray(start, end)); // 0: ISO-8859-1
+    return s.split('\u0000')[0]; // 末尾のNUL・複数値の区切り以降を切り捨てる
+  }
+
+  // ID3v2ヘッダ+タグ本体を読み込み、フレームを1件ずつ渡す。読めない形式(未同期化タグなど)なら null を返す
+  async function walkFrames(file, onFrame) {
     const head = await readHead(file);
     if (!isId3(head)) return null;
     const ver = head[3];
@@ -31,36 +53,89 @@ const FastTags = (() => {
       const size = ver === 2 ? (buf[pos + 3] << 16) | (buf[pos + 4] << 8) | buf[pos + 5]
         : ver === 4 ? syncsafe(buf, pos + 4) : be32(buf, pos + 4);
       const fflags = ver === 2 ? 0 : (buf[pos + 8] << 8) | buf[pos + 9];
-      let ds = pos + hdrLen;
+      const ds = pos + hdrLen;
       const end = ds + size;
-      if (end > total || size <= 0) return null;
-      if (id === 'APIC' || id === 'PIC') {
-        if (ver === 4 && (fflags & 0x0d)) return null; // 圧縮・暗号化・未同期化されたフレームは扱わない
-        if (ver === 3 && (fflags & 0x00e0)) return null;
-        if (ver === 4 && (fflags & 0x01)) ds += 4; // データ長の指示子
-        const enc = buf[ds];
-        let p = ds + 1;
-        let mime;
-        if (ver === 2) {
-          const fmt = String.fromCharCode(...buf.subarray(p, p + 3)).toUpperCase();
-          mime = fmt === 'PNG' ? 'image/png' : 'image/jpeg';
-          p += 3;
-        } else {
-          const s = p;
-          while (p < end && buf[p] !== 0) p++;
-          mime = String.fromCharCode(...buf.subarray(s, p)) || 'image/jpeg';
-          p++;
-          if (mime === 'image/jpg') mime = 'image/jpeg';
-        }
-        p++; // 画像の種類(表紙など)
-        if (enc === 1 || enc === 2) { while (p + 1 < end && !(buf[p] === 0 && buf[p + 1] === 0)) p += 2; p += 2; } // 説明文(UTF-16)
-        else { while (p < end && buf[p] !== 0) p++; p++; } // 説明文
-        if (p >= end) return { blob: null };
-        return { blob: new Blob([buf.subarray(p, end)], { type: mime }) };
-      }
+      if (end > total || size <= 0) break; // サイズがおかしければ、それ以上は読めないので打ち切る
+      const unsupported = ver === 4 ? (fflags & 0x0d) : ver === 3 ? (fflags & 0x00e0) : false; // 圧縮・暗号化・未同期化は扱わない
+      if (!unsupported) onFrame(id, buf, (ver === 4 && (fflags & 0x01)) ? ds + 4 : ds, end, ver);
       pos = end;
     }
-    return { blob: null };
+    return buf;
+  }
+
+  // ID3v2 のジャケット画像だけを { blob } で返す(歌詞などファイル種別の判定用に、今も単独で使う場面がある)
+  async function readPicture(file) {
+    let result = null;
+    const ok = await walkFrames(file, (id, buf, ds, end, ver) => {
+      if (result || (id !== 'APIC' && id !== 'PIC')) return;
+      result = parsePicture(buf, ds, end, ver);
+    });
+    if (ok === null) return null;
+    return result || { blob: null };
+  }
+
+  function parsePicture(buf, ds, end, ver) {
+    const enc = buf[ds];
+    let p = ds + 1;
+    let mime;
+    if (ver === 2) {
+      mime = String.fromCharCode(...buf.subarray(p, p + 3)).toUpperCase() === 'PNG' ? 'image/png' : 'image/jpeg';
+      p += 3;
+    } else {
+      const s = p;
+      while (p < end && buf[p] !== 0) p++;
+      mime = String.fromCharCode(...buf.subarray(s, p)) || 'image/jpeg';
+      p++;
+      if (mime === 'image/jpg') mime = 'image/jpeg';
+    }
+    p++; // 画像の種類(表紙など)
+    if (enc === 1 || enc === 2) { while (p + 1 < end && !(buf[p] === 0 && buf[p + 1] === 0)) p += 2; p += 2; } // 説明文(UTF-16)
+    else { while (p < end && buf[p] !== 0) p++; p++; } // 説明文
+    if (p >= end) return { blob: null };
+    return { blob: new Blob([buf.subarray(p, end)], { type: mime }) };
+  }
+
+  // 歌詞(USLT/ULT)フレーム: エンコーディング(1)+言語(3、読み飛ばす)+短い説明(NUL終端)+歌詞本文
+  function parseLyricsFrame(buf, ds, end, ver) {
+    const enc = buf[ds];
+    let p = ds + 4; // エンコーディング1 + 言語3
+    if (enc === 1 || enc === 2) { while (p + 1 < end && !(buf[p] === 0 && buf[p + 1] === 0)) p += 2; p += 2; }
+    else { while (p < end && buf[p] !== 0) p++; p++; }
+    return decodeText(buf, Math.min(p, end), end, enc);
+  }
+
+  // 曲名・アーティスト等・並び替え用の読み・歌詞・ジャケット画像を、まとめて1回の読み込みで取り出す
+  // 戻り値の tags は、今までの jsmediatags 版と同じ形(title/artist/album/genre/year/TSOT/TSOP/TSOA/lyrics が、いずれも文字列)で返す
+  async function readAll(file) {
+    const TEXT_MAP = { // ID3v2.2(3文字) / v2.3・v2.4(4文字)の両方に対応
+      TT2: 'title', TIT2: 'title',
+      TP1: 'artist', TPE1: 'artist',
+      TAL: 'album', TALB: 'album',
+      TCO: 'genre', TCON: 'genre',
+      TYE: 'year', TYER: 'year', TDRC: 'year', TDOR: 'year', TDRL: 'year', TORY: 'year',
+      TST: 'TSOT', TSOT: 'TSOT',
+      TSP: 'TSOP', TSOP: 'TSOP',
+      TSA: 'TSOA', TSOA: 'TSOA',
+    };
+    const tags = {};
+    let artworkBlob = null;
+    const ok = await walkFrames(file, (id, buf, ds, end, ver) => {
+      if (id === 'APIC' || id === 'PIC') {
+        if (!artworkBlob) artworkBlob = parsePicture(buf, ds, end, ver).blob;
+        return;
+      }
+      if (id === 'USLT' || id === 'ULT') {
+        if (!tags.lyrics) tags.lyrics = parseLyricsFrame(buf, ds, end, ver);
+        return;
+      }
+      const field = TEXT_MAP[id];
+      if (!field || tags[field]) return; // 同じ項目が複数あれば、先に見つかった方を使う
+      const enc = buf[ds];
+      const text = decodeText(buf, ds + 1, end, enc);
+      if (text) tags[field] = text;
+    });
+    if (ok === null) return null;
+    return { tags, artworkBlob };
   }
 
   // ---- MP3の長さ ----
@@ -118,5 +193,5 @@ const FastTags = (() => {
     return null;
   }
 
-  return { readPicture, mp3Duration };
+  return { readPicture, readAll, mp3Duration };
 })();

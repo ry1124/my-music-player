@@ -145,7 +145,8 @@ function refreshIndexTarget() {
   active.classList.toggle('has-plain-scrollbar', plain);
   if (plain) updatePlainScrollbar(active);
 }
-const PLAIN_SCROLL_VIEWS = new Set(['view-playlists', 'view-playlist-detail', 'view-queue', 'view-season-folder', 'view-years', 'view-genres']);
+// view-group-detail はアーティストの曲一覧のときだけ対象(年代/ジャンルはあいうえお順バーが出るので、plainは自動で out になる)
+const PLAIN_SCROLL_VIEWS = new Set(['view-playlists', 'view-playlist-detail', 'view-queue', 'view-season-folder', 'view-years', 'view-genres', 'view-group-detail']);
 
 // 見た目だけのスクロールバー(タップして飛ぶ機能は無い)。今の画面のスクロール量から、つまみの位置と大きさを決める
 function updatePlainScrollbar(view) {
@@ -190,7 +191,7 @@ function bindUIEvents() {
       const tab = btn.dataset.tab;
       if (tab === 'years') renderYearList();
       else if (tab === 'genres') renderGenreList();
-      else if (tab === 'artists') renderArtistList();
+      else if (tab === 'artists') renderArtistList(document.getElementById('artist-search-input').value.trim());
       showView(TAB_VIEW_MAP[tab] || 'view-library');
     });
   });
@@ -204,7 +205,7 @@ function bindUIEvents() {
       (f) => f.type.startsWith('audio/') || /\.(mp3|m4a|aac|flac|wav|aiff?|alac|ogg|opus|caf|mp4)$/i.test(f.name)
     );
     if (audioFiles.length === 0 && e.target.files.length > 0) {
-      alert('音楽ファイル(mp3/m4a/flac/wav等)が選択されていません');
+      dialogAlert('音楽ファイル(mp3/m4a/flac/wav等)が選択されていません');
     }
     handleFilesSelected(audioFiles);
     e.target.value = '';
@@ -251,6 +252,13 @@ function bindUIEvents() {
     const value = e.target.value.trim();
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => renderTrackList(value), 200); // 入力が止まってから描画
+  });
+
+  let artistSearchTimer = null;
+  document.getElementById('artist-search-input').addEventListener('input', (e) => {
+    const value = e.target.value.trim();
+    clearTimeout(artistSearchTimer);
+    artistSearchTimer = setTimeout(() => renderArtistList(value), 200);
   });
 
   document.getElementById('btn-new-playlist').addEventListener('click', createPlaylistPrompt);
@@ -394,13 +402,12 @@ function parseFileName(fileName) {
   return { artist: m[1].trim(), title: m[2].trim() };
 }
 
-// 取り込み用の読み取り。MP3(ID3v2)は、画像を自前で取り出し、jsmediatagsには文字の情報だけを読ませる(画像まで解析させると数倍遅い)
-const IMPORT_TEXT_TAGS = ['title', 'artist', 'album', 'genre', 'year', 'lyrics', 'TSOT', 'TSOP', 'TSOA', 'TDRC', 'TYER', 'TDAT', 'TST', 'TSP', 'TSA', 'TYE', 'USLT', 'ULT'];
+// 取り込み用の読み取り。MP3(ID3v2)は、jsmediatagsを使わず自前でフレームを直接デコードする(文字・画像とも1回の読み込みで済み、数倍速い)
 async function readTagsForImport(file) {
-  let pic = null;
-  try { pic = await FastTags.readPicture(file); } catch (err) { pic = null; }
-  if (pic) return { tags: await readTags(file, IMPORT_TEXT_TAGS), artworkBlob: pic.blob };
-  const tags = await readTags(file); // MP3以外(m4a・flacなど)や、特殊なタグは、今までの読み方
+  let fast = null;
+  try { fast = await FastTags.readAll(file); } catch (err) { fast = null; }
+  if (fast) return fast;
+  const tags = await readTags(file); // MP3以外(m4a・flacなど)や、未同期化タグなど特殊な形式は、今までの(jsmediatagsの)読み方
   return { tags, artworkBlob: pictureToBlob(tags.picture) };
 }
 async function fastDuration(file) {
@@ -505,7 +512,7 @@ async function handleFilesSelected(fileList) {
   setTimeout(migrateThumbs, 300); // 一覧用の小さな画像を、裏で作る
   const totalSec = Math.round((Date.now() - startTime) / 1000);
   const timeText = totalSec >= 60 ? `${Math.floor(totalSec / 60)}分${totalSec % 60}秒` : `${totalSec}秒`;
-  alert(`取り込み完了: 新規${addedCount}曲を追加、${skippedCount}曲は追加済みのためスキップ(所要${timeText})` +
+  dialogAlert(`取り込み完了: 新規${addedCount}曲を追加、${skippedCount}曲は追加済みのためスキップ(所要${timeText})` +
     (failures.length > 0 ? `\n\n失敗${failures.length}件:\n${failures.slice(0, 5).join('\n')}` : '') +
     (tagReadErrors.length > 0 ? `\n\nタグ情報を取得できなかった曲${tagReadErrors.length}件:\n${tagReadErrors.slice(0, 3).join('\n')}` : ''));
 }
@@ -593,7 +600,7 @@ function importLyricsForTrack(track) {
     const text = await file.text();
     applyLyricsText(track, text);
     await DB.updateTrack(track);
-    alert(`「${track.title}」に歌詞を読み込みました${track.syncedLyrics ? '(曲に合わせて動きます)' : ''}`);
+    dialogAlert(`「${track.title}」に歌詞を読み込みました${track.syncedLyrics ? '(曲に合わせて動きます)' : ''}`);
     if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
   };
   input.click();
@@ -624,7 +631,7 @@ async function handleLyricsFilesSelected(fileList) {
   const unmatchedText = unmatchedNames.length > 0
     ? `\n\n曲名が一致せず未適用(${unmatchedNames.length}件):\n` + unmatchedNames.slice(0, 10).join('\n') + (unmatchedNames.length > 10 ? '\n...' : '')
     : '';
-  alert(`歌詞インポート完了: ${matched}曲に適用(うち${syncedCount}曲は曲に合わせて動きます)${unmatchedText}`);
+  dialogAlert(`歌詞インポート完了: ${matched}曲に適用(うち${syncedCount}曲は曲に合わせて動きます)${unmatchedText}`);
 }
 
 // ===== 歌詞のネット自動検索(lrclib.net) =====
@@ -672,16 +679,16 @@ async function applyLyricsFromNet(track, onlyIfMatched = false) {
 }
 
 async function autoFetchLyrics() {
-  if (isAutoFetchingLyrics) { alert('すでに検索中です'); return; }
+  if (isAutoFetchingLyrics) { dialogAlert('すでに検索中です'); return; }
   const idx = await showChoiceSheet('歌詞をネットから自動検索', ['歌詞が無い曲を検索', '時刻付き歌詞を、曲の長さに合う版で入れ直す(ずれ直し)']);
   if (idx < 0) return;
   const resync = idx === 1;
   const targets = resync ? tracks.filter(t => t.syncedLyrics && t.syncedLyrics.length > 0 && !t.lyricsDurationMatched) : tracks.filter(t => !t.lyrics);
-  if (targets.length === 0) { alert(resync ? '入れ直す対象の曲はありません' : '歌詞が無い曲はありません'); return; }
+  if (targets.length === 0) { dialogAlert(resync ? '入れ直す対象の曲はありません' : '歌詞が無い曲はありません'); return; }
   const message = resync
     ? `時刻付き歌詞のある${targets.length}曲について、曲の長さに合う版を探して入れ直します。長さの合う版が見つかった曲だけ差し替え、見つからない曲は今のままです(手動で読み込んだ歌詞ファイルも、合う版が見つかれば入れ替わります)。数分〜十数分かかります。アプリを開いたまま待つ必要があります。始めますか?`
     : `歌詞が無い${targets.length}曲をネットで自動検索します。曲数によっては数分〜十数分かかります。アプリを開いたまま待つ必要があります。始めますか?`;
-  if (!confirm(message)) return;
+  if (!dialogConfirm(message)) return;
 
   isAutoFetchingLyrics = true;
   const progressEl = document.getElementById('import-progress');
@@ -711,17 +718,17 @@ async function autoFetchLyrics() {
   isAutoFetchingLyrics = false;
   progressEl.classList.add('hidden');
   if (currentTrack) { lastActiveLyricIdx = -1; updateLyricsPane(); }
-  alert(`歌詞自動検索完了: ${found}曲ヒット(うち${syncedCount}曲は曲に合わせて動きます) / 見つからず${notFound}曲 / エラー${errorCount}件`);
+  dialogAlert(`歌詞自動検索完了: ${found}曲ヒット(うち${syncedCount}曲は曲に合わせて動きます) / 見つからず${notFound}曲 / エラー${errorCount}件`);
 }
 
 // ===== 年代・ジャンル情報の再スキャン(既存曲にyear/genreを補完) =====
 let isRescanningTags = false;
 
 async function rescanYearGenreTags() {
-  if (isRescanningTags) { alert('すでに実行中です'); return; }
+  if (isRescanningTags) { dialogAlert('すでに実行中です'); return; }
   const targets = tracks.filter(t => !t.readingsScanned || !t.artworkScanned || !t.year || !t.genre || t.artist === UNKNOWN_ARTIST);
-  if (targets.length === 0) { alert('すべての曲にタグ情報があります(または元々タグが無く再取得できません)'); return; }
-  if (!confirm(`${targets.length}曲のアーティスト・年代・ジャンル・読み(並び替え用)・ジャケット画像を再スキャンします。曲数によっては数分かかることがあります。始めますか?`)) return;
+  if (targets.length === 0) { dialogAlert('すべての曲にタグ情報があります(または元々タグが無く再取得できません)'); return; }
+  if (!dialogConfirm(`${targets.length}曲のアーティスト・年代・ジャンル・読み(並び替え用)・ジャケット画像を再スキャンします。曲数によっては数分かかることがあります。始めますか?`)) return;
 
   isRescanningTags = true;
   const progressEl = document.getElementById('import-progress');
@@ -733,7 +740,7 @@ async function rescanYearGenreTags() {
     progressEl.textContent = `年代・ジャンルを再スキャン中... ${Math.min(i + IMPORT_CONCURRENCY, targets.length)}/${targets.length}曲`;
     await Promise.all(chunk.map(async (track) => {
       try {
-        const tags = await readTags(track.fileBlob);
+        const { tags, artworkBlob: scannedArtwork } = await readTagsForImport(track.fileBlob); // MP3ならjsmediatagsを使わない高速な読み取り
         const year = extractYear(tags);
         const genre = extractGenre(tags);
         let changed = false;
@@ -746,9 +753,8 @@ async function rescanYearGenreTags() {
         }
         if (!track.artworkScanned) {
           if (!track.artworkBlob) {
-            const art = pictureToBlob(tags.picture);
-            if (art) {
-              track.artworkBlob = art;
+            if (scannedArtwork) {
+              track.artworkBlob = scannedArtwork;
               artworkUrlCache.delete(track.id); // 古い(既定画像の)キャッシュを捨てて、次の描画で新しい画像を使う
               thumbUrlCache.delete(track.id);
             }
@@ -782,7 +788,7 @@ async function rescanYearGenreTags() {
   migrateThumbs(); // 新しく入ったジャケットのサムネイルを裏で作る
   markLibraryChanged();
   renderTrackList(document.getElementById('search-input').value.trim());
-  alert(`再スキャン完了: ${updated}/${targets.length}曲のタグ情報(年代・ジャンル・読みなど)を更新しました`);
+  dialogAlert(`再スキャン完了: ${updated}/${targets.length}曲のタグ情報(年代・ジャンル・読みなど)を更新しました`);
 }
 
 // ===== 年代別・ジャンル別グルーピング =====
@@ -872,9 +878,9 @@ function fillGroupRows(listEl, rows) {
   });
 }
 
-function renderGroupList(listElId, groupFn, sortFn, keyFn, cacheKey = '') {
+function renderGroupList(listElId, groupFn, sortFn, keyFn, cacheKey = '', filter = '') {
   const listEl = document.getElementById(listElId);
-  const ver = `${libVersion}|${cacheKey}`;
+  const ver = `${libVersion}|${cacheKey}|${filter}`;
   if (listEl._ver === ver) return; // 曲が変わっていなければ、前回の一覧をそのまま使う
   listEl._ver = ver;
   const groups = new Map(); // label -> track[]
@@ -884,7 +890,10 @@ function renderGroupList(listElId, groupFn, sortFn, keyFn, cacheKey = '') {
     groups.get(label).push(t);
   });
   const backView = { 'year-list': 'view-years', 'genre-list': 'view-genres', 'artist-list': 'view-artists' }[listElId];
-  const rows = [...groups.keys()].sort(sortFn || defaultLabelSort).map((label) => {
+  const f = filter.trim().toLowerCase();
+  // 名前(アーティスト名など)か、中の曲のタイトルのどちらかに一致すれば残す
+  const keys = f ? [...groups.keys()].filter(label => label.toLowerCase().includes(f) || groups.get(label).some(t => t.title.toLowerCase().includes(f))) : [...groups.keys()];
+  const rows = keys.sort(sortFn || defaultLabelSort).map((label) => {
     const groupTracks = groups.get(label);
     return {
       name: label,
@@ -903,7 +912,7 @@ function renderGenreList() { renderGroupList('genre-list', genreLabel); }
 function artistLabel(track) {
   return track.artist && track.artist.trim() && track.artist !== UNKNOWN_ARTIST ? track.artist.trim() : '不明';
 }
-function renderArtistList() {
+function renderArtistList(filter = '') {
   // アーティストの読み(TSOP)があれば、それで並べる。無ければ表記そのまま
   const reading = new Map();
   tracks.forEach((t) => {
@@ -915,7 +924,7 @@ function renderArtistList() {
     if (a === '不明') return 1;
     if (b === '不明') return -1;
     return sectionSort(keyOf(a), keyOf(b));
-  }, keyOf);
+  }, keyOf, '', filter);
 }
 
 function openGroupDetail(label, groupTracks, backView) {
@@ -951,6 +960,7 @@ function renderGroupDetailList(list) {
   setGroupMode('tracks');
   const listEl = document.getElementById('group-detail-list');
   fillTrackList(listEl, list, list.map(t => t.id));
+  refreshPlainScrollbarIfActive();
 }
 
 // ジャンル詳細画面専用: ジャンル → アルバム一覧 → 曲 の3段階。先頭の「すべての曲」でジャンル内の全曲を連続再生できる
@@ -1482,6 +1492,32 @@ function fillTrackList(listEl, list, ids) {
   });
 }
 
+// ===== alert/confirm/prompt の置き換え =====
+// iOSでは、曲の再生中にこれらのダイアログを出すと、表示している間に再生が止まり、閉じても自動では再開しない。
+// 必ずこの3つ経由で呼ぶことで、再生中だったときだけ、閉じたあとに自動で再開する
+function dialogWasPlaying() { return !!(currentTrack && !audioEl.paused); }
+function resumePlaybackAfterDialog() {
+  AudioEngine.resume();
+  if (audioEl.paused) audioEl.play().catch(() => {});
+}
+function dialogAlert(msg) {
+  const wasPlaying = dialogWasPlaying();
+  window.alert(msg);
+  if (wasPlaying) resumePlaybackAfterDialog();
+}
+function dialogConfirm(msg) {
+  const wasPlaying = dialogWasPlaying();
+  const result = window.confirm(msg);
+  if (wasPlaying) resumePlaybackAfterDialog();
+  return result;
+}
+function dialogPrompt(msg, def) {
+  const wasPlaying = dialogWasPlaying();
+  const result = window.prompt(msg, def);
+  if (wasPlaying) resumePlaybackAfterDialog();
+  return result;
+}
+
 // ===== アクションシート(簡易メニュー) =====
 // 画面下からせり上がる選択メニュー。選んだ項目の番号を返す(キャンセルは -1)
 function showChoiceSheet(title, options) {
@@ -1566,23 +1602,23 @@ async function openTrackActionSheet(track) {
 // (イントロの長さが、歌詞データの元になった版と、手元のファイルとで違う場合に有効)
 async function estimateSilenceOffset(track) {
   const firstLine = (track.syncedLyrics || []).find(l => l.text && l.text.trim());
-  if (!firstLine) { alert('歌詞の1行目が見つかりませんでした'); return; }
+  if (!firstLine) { dialogAlert('歌詞の1行目が見つかりませんでした'); return; }
   let silence;
   try {
     silence = await AudioEngine.detectLeadSilence(track.fileBlob);
   } catch (err) {
     console.error('無音の検出に失敗:', track.title, err);
-    alert('この曲は解析できませんでした(対応していない形式の可能性があります)');
+    dialogAlert('この曲は解析できませんでした(対応していない形式の可能性があります)');
     return;
   }
   const cur = track.lyricOffset || 0;
   const newOffset = Math.round((firstLine.time - silence) * 10) / 10;
-  if (Math.abs(newOffset - cur) < 0.15) { alert(`曲の頭の無音: 約${silence.toFixed(1)}秒。今の「ずれ」(${cur.toFixed(1)}秒)から、ほとんど変わらないので、調整しませんでした。`); return; }
-  if (!confirm(`曲の頭の無音: 約${silence.toFixed(1)}秒 / 歌詞の1行目: ${firstLine.time.toFixed(1)}秒\n\n「ずれ」を ${cur.toFixed(1)}秒 → ${newOffset.toFixed(1)}秒 に変更します。よろしいですか?\n(あくまで目安です。合わない場合は、あとで「タップで合わせる」で直せます)`)) return;
+  if (Math.abs(newOffset - cur) < 0.15) { dialogAlert(`曲の頭の無音: 約${silence.toFixed(1)}秒。今の「ずれ」(${cur.toFixed(1)}秒)から、ほとんど変わらないので、調整しませんでした。`); return; }
+  if (!dialogConfirm(`曲の頭の無音: 約${silence.toFixed(1)}秒 / 歌詞の1行目: ${firstLine.time.toFixed(1)}秒\n\n「ずれ」を ${cur.toFixed(1)}秒 → ${newOffset.toFixed(1)}秒 に変更します。よろしいですか?\n(あくまで目安です。合わない場合は、あとで「タップで合わせる」で直せます)`)) return;
   track.lyricOffset = newOffset;
   await DB.updateTrack(track);
   if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
-  alert('ずれを調整しました');
+  dialogAlert('ずれを調整しました');
 }
 
 // この1曲だけ、曲の長さに合う歌詞をネットで検索し直す(ずれている曲の直し用)
@@ -1590,12 +1626,12 @@ async function refetchLyrics(track) {
   try {
     const result = await applyLyricsFromNet(track);
     if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
-    if (result === 'synced') alert('曲の長さに合う歌詞が見つかりました。曲に合わせて動きます。');
-    else if (result === 'plain') alert('この曲の長さに合う「時刻付き」の歌詞は見つからず、文字だけの歌詞を登録しました(曲に合わせては動きません)。');
-    else alert('この曲の歌詞は見つかりませんでした。');
+    if (result === 'synced') dialogAlert('曲の長さに合う歌詞が見つかりました。曲に合わせて動きます。');
+    else if (result === 'plain') dialogAlert('この曲の長さに合う「時刻付き」の歌詞は見つからず、文字だけの歌詞を登録しました(曲に合わせては動きません)。');
+    else dialogAlert('この曲の歌詞は見つかりませんでした。');
   } catch (err) {
     console.error('歌詞の再検索失敗:', track.title, err);
-    alert('歌詞の検索に失敗しました(通信状況を確認してください)。');
+    dialogAlert('歌詞の検索に失敗しました(通信状況を確認してください)。');
   }
 }
 
@@ -1613,7 +1649,7 @@ function removeFromQueues(id) {
 }
 
 async function deleteTrackFromLibrary(trackId) {
-  if (!confirm('この曲をライブラリから削除しますか?')) return;
+  if (!dialogConfirm('この曲をライブラリから削除しますか?')) return;
   await DB.deleteTrack(trackId);
   await DB.deleteThumb(trackId);
   removeFromQueues(trackId);
@@ -1989,9 +2025,9 @@ function toggleSongEditMode() {
 }
 
 async function createPlaylistPrompt() {
-  const name = prompt('プレイリスト名を入力してください');
+  const name = dialogPrompt('プレイリスト名を入力してください');
   if (!name || !name.trim()) return;
-  if (reservedListName(name)) { alert(`「${name.trim()}」は、自動の一覧と同じ名前です。別の名前にしてください`); return; }
+  if (reservedListName(name)) { dialogAlert(`「${name.trim()}」は、自動の一覧と同じ名前です。別の名前にしてください`); return; }
   const playlist = { name: name.trim(), trackIds: [], createdAt: Date.now() };
   const id = await DB.addPlaylist(playlist);
   playlist.id = id;
@@ -2104,9 +2140,9 @@ async function openListActionSheet(key) {
   if (idx < 0) return;
   const labels = { ...(Settings.get('listLabels') || {}) };
   if (idx === 0) {
-    const name = prompt('新しい名前', listLabel(key));
+    const name = dialogPrompt('新しい名前', listLabel(key));
     if (name === null || !name.trim()) return;
-    if (reservedListName(name, key)) { alert(`「${name.trim()}」は、ほかの一覧と同じ名前です。別の名前にしてください`); return; }
+    if (reservedListName(name, key)) { dialogAlert(`「${name.trim()}」は、ほかの一覧と同じ名前です。別の名前にしてください`); return; }
     labels[key] = name.trim();
   } else {
     delete labels[key];
@@ -2124,9 +2160,9 @@ function reservedListName(name, exceptKey) {
 }
 
 async function renamePlaylist(pl) {
-  const name = prompt('プレイリストの新しい名前', pl.name);
+  const name = dialogPrompt('プレイリストの新しい名前', pl.name);
   if (name === null || !name.trim() || name.trim() === pl.name) return;
-  if (reservedListName(name)) { alert(`「${name.trim()}」は、自動の一覧と同じ名前です。別の名前にしてください`); return; }
+  if (reservedListName(name)) { dialogAlert(`「${name.trim()}」は、自動の一覧と同じ名前です。別の名前にしてください`); return; }
   pl.name = name.trim();
   await DB.updatePlaylist(pl);
   renderPlaylistList();
@@ -2136,7 +2172,7 @@ async function openPlaylistActionSheet(pl) {
   const idx = await showChoiceSheet(pl.name, ['名前を変更', 'プレイリストを削除']);
   if (idx === 0) { renamePlaylist(pl); return; }
   if (idx !== 1) return;
-  if (!confirm(`プレイリスト「${pl.name}」を削除しますか?(曲自体はライブラリに残ります)`)) return;
+  if (!dialogConfirm(`プレイリスト「${pl.name}」を削除しますか?(曲自体はライブラリに残ります)`)) return;
   deletePlaylistById(pl.id);
 }
 
@@ -2151,7 +2187,7 @@ async function deletePlaylistById(idText) {
 
 async function addTrackToPlaylistPrompt(trackId) {
   if (playlists.length === 0) {
-    const name = prompt('プレイリストがありません。新規作成しますか?名前を入力してください');
+    const name = dialogPrompt('プレイリストがありません。新規作成しますか?名前を入力してください');
     if (!name || !name.trim()) return;
     const playlist = { name: name.trim(), trackIds: [trackId], createdAt: Date.now() };
     const id = await DB.addPlaylist(playlist);
@@ -2321,8 +2357,8 @@ function updateLoudnessStatus() {
 async function analyzeAllLoudness() {
   if (analyzingAll) return;
   const targets = tracks.filter(t => typeof t.gainDb !== 'number');
-  if (targets.length === 0) { alert('すべての曲を解析済みです'); return; }
-  if (!confirm(`${targets.length}曲の音量を解析します。曲数によっては数分〜数十分かかります。アプリを開いたまま待つ必要があります。始めますか?`)) return;
+  if (targets.length === 0) { dialogAlert('すべての曲を解析済みです'); return; }
+  if (!dialogConfirm(`${targets.length}曲の音量を解析します。曲数によっては数分〜数十分かかります。アプリを開いたまま待つ必要があります。始めますか?`)) return;
   analyzingAll = true;
   const btn = document.getElementById('btn-analyze-loudness');
   const status = document.getElementById('loudness-status');
@@ -2340,7 +2376,7 @@ async function analyzeAllLoudness() {
 function onAudioSettingsChanged() {
   if (AudioEngine.needed()) {
     if (!AudioEngine.ensure([audioA, audioB])) {
-      alert('この端末では、音声の特別な処理を使えません');
+      dialogAlert('この端末では、音声の特別な処理を使えません');
       Settings.set('joint', 'off');
       Settings.set('soundCheck', false);
       if (settingsUIRefresh) settingsUIRefresh();
@@ -2515,10 +2551,10 @@ function findDuplicateGroups() {
 
 async function mergeDuplicates() {
   const groups = findDuplicateGroups();
-  if (groups.length === 0) { alert('重複した曲は見つかりませんでした'); return; }
+  if (groups.length === 0) { dialogAlert('重複した曲は見つかりませんでした'); return; }
   const removeCount = groups.reduce((n, g) => n + g.length - 1, 0);
   const sample = groups.slice(0, 5).map(g => `・${g[0].title}(${g.length}つ)`).join('\n');
-  if (!confirm(`同じ曲が重複しているものが、${groups.length}組(削除される曲: ${removeCount}曲)見つかりました。\n${sample}${groups.length > 5 ? '\n…' : ''}\n\n1つにまとめます。お気に入り・プレイリスト・再生回数・歌詞は、残す曲に引き継ぎます。よろしいですか?`)) return;
+  if (!dialogConfirm(`同じ曲が重複しているものが、${groups.length}組(削除される曲: ${removeCount}曲)見つかりました。\n${sample}${groups.length > 5 ? '\n…' : ''}\n\n1つにまとめます。お気に入り・プレイリスト・再生回数・歌詞は、残す曲に引き継ぎます。よろしいですか?`)) return;
 
   const usage = new Map(); // 曲id → プレイリストに入っている数
   playlists.forEach(pl => pl.trackIds.forEach(id => usage.set(id, (usage.get(id) || 0) + 1)));
@@ -2561,7 +2597,7 @@ async function mergeDuplicates() {
   renderTrackList(document.getElementById('search-input').value.trim());
   renderPlaylistList();
   updateLoudnessStatus();
-  alert(`${removeCount}曲の重複をまとめました`);
+  dialogAlert(`${removeCount}曲の重複をまとめました`);
 }
 
 // ===== 診断情報(不具合の原因を調べるために、画面の状態をそのまま表示する) =====
@@ -2619,7 +2655,7 @@ function bindSettings() {
       if (r.ok) showToast(`書き出しました(プレイリスト${r.playlists}件・曲${r.tracks}曲分)`);
     } catch (err) {
       console.error('バックアップの書き出しに失敗:', err);
-      alert('書き出しに失敗しました');
+      dialogAlert('書き出しに失敗しました');
     }
   });
   const fileInput = $('backup-file-input');
@@ -2629,12 +2665,12 @@ function bindSettings() {
     if (!file) return;
     try {
       const data = Backup.parse(await file.text());
-      if (!confirm(`バックアップ(${(data.exportedAt || '').slice(0, 10)})から復元します。\n・プレイリスト${data.playlists.length}件(今のプレイリストは、この内容に置き換わります)\n・曲の情報${data.tracks.length}曲分(お気に入り・編集・歌詞など)\n・設定\n曲のファイルは変わりません。よろしいですか?`)) return;
+      if (!dialogConfirm(`バックアップ(${(data.exportedAt || '').slice(0, 10)})から復元します。\n・プレイリスト${data.playlists.length}件(今のプレイリストは、この内容に置き換わります)\n・曲の情報${data.tracks.length}曲分(お気に入り・編集・歌詞など)\n・設定\n曲のファイルは変わりません。よろしいですか?`)) return;
       const r = await Backup.restore(data);
-      alert(`復元しました。曲の情報は、${r.total}曲中${r.matched}曲が見つかり、反映しました。アプリを再読み込みします`);
+      dialogAlert(`復元しました。曲の情報は、${r.total}曲中${r.matched}曲が見つかり、反映しました。アプリを再読み込みします`);
       location.reload();
     } catch (err) {
-      alert(err.message || '復元に失敗しました');
+      dialogAlert(err.message || '復元に失敗しました');
     }
   });
 }
@@ -2668,9 +2704,9 @@ async function saveEditTrack() {
   const track = editingTrack;
   if (!track) return;
   const val = (id) => document.getElementById(id).value.trim();
-  if (!val('edit-title')) { alert('タイトルを入力してください'); return; }
+  if (!val('edit-title')) { dialogAlert('タイトルを入力してください'); return; }
   const year = val('edit-year').normalize('NFKC');
-  if (year && !/^\d{4}$/.test(year)) { alert('年は、西暦4けたの数字で入力してください(例: 2005)'); return; }
+  if (year && !/^\d{4}$/.test(year)) { dialogAlert('年は、西暦4けたの数字で入力してください(例: 2005)'); return; }
   EDIT_FIELDS.forEach(([key, id]) => { track[key] = key === 'year' ? year : val(id); });
   if (!track.artist) track.artist = UNKNOWN_ARTIST;
   track.readingsScanned = true; // 読みは自分で決めたので、ファイルのタグで上書きしない
@@ -3036,7 +3072,7 @@ function updateLyricsPane() {
   } else {
     pane.textContent = '歌詞が登録されていません。タップして入力';
     pane.onclick = async () => {
-      const text = prompt('歌詞を入力してください', '');
+      const text = dialogPrompt('歌詞を入力してください', '');
       if (text === null) return;
       currentTrack.lyrics = text;
       currentTrack.syncedLyrics = null;
