@@ -284,6 +284,18 @@ function bindUIEvents() {
   ['track-list', 'group-detail-list', 'playlist-detail-list'].forEach(id => bindSwipeToPlayNext(document.getElementById(id)));
   document.getElementById('btn-edit-cancel').addEventListener('click', closeEditTrack);
   document.getElementById('btn-edit-save').addEventListener('click', saveEditTrack);
+  document.getElementById('btn-edit-artwork-change').addEventListener('click', () => document.getElementById('edit-artwork-input').click());
+  document.getElementById('edit-artwork-input').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = ''; // 同じ写真を選び直したときも change が起きるように
+    if (!file) return;
+    editingArtwork = file;
+    updateEditArtworkPreview(editingTrack);
+  });
+  document.getElementById('btn-edit-artwork-remove').addEventListener('click', () => {
+    editingArtwork = null;
+    updateEditArtworkPreview(editingTrack);
+  });
   document.getElementById('btn-back-queue').addEventListener('click', () => showView('view-nowplaying'));
   const queueListEl = document.getElementById('queue-list');
   queueListEl.addEventListener('click', (e) => {
@@ -2705,22 +2717,49 @@ const EDIT_FIELDS = [
 ];
 let editingTrack = null;
 let viewBeforeEdit = 'view-library';
+// ジャケット写真の変更は、保存を押すまで確定しない: undefined=変更なし / null=削除 / Blob=差し替え
+let editingArtwork;
+let editingArtworkPreviewUrl = null; // 選び直した画像のプレビュー用object URL(閉じるときに解放する)
+
+function updateEditArtworkPreview(track) {
+  const img = document.getElementById('edit-artwork-preview');
+  if (editingArtworkPreviewUrl) { URL.revokeObjectURL(editingArtworkPreviewUrl); editingArtworkPreviewUrl = null; }
+  if (editingArtwork === null) { img.src = 'icons/default-artwork.png'; return; }
+  if (editingArtwork) { editingArtworkPreviewUrl = URL.createObjectURL(editingArtwork); img.src = editingArtworkPreviewUrl; return; }
+  img.src = getArtworkUrl(track);
+}
 
 function openEditTrack(track) {
   editingTrack = track;
+  editingArtwork = undefined;
   const active = document.querySelector('.view.active');
   viewBeforeEdit = active ? active.id : 'view-library';
   EDIT_FIELDS.forEach(([key, id]) => {
     document.getElementById(id).value = key === 'artist' && track.artist === UNKNOWN_ARTIST ? '' : (track[key] || '');
   });
   document.getElementById('edit-file-name').textContent = (track.fileBlob && track.fileBlob.name) || '';
+  updateEditArtworkPreview(track);
   showView('view-edit-track');
   document.getElementById('view-edit-track').scrollTop = 0;
 }
 
 function closeEditTrack() {
   editingTrack = null;
+  editingArtwork = undefined;
+  if (editingArtworkPreviewUrl) { URL.revokeObjectURL(editingArtworkPreviewUrl); editingArtworkPreviewUrl = null; }
   showView(viewBeforeEdit);
+}
+
+// 選んだ画像を、新しいジャケットとして差し替える(保存を押すまでは反映しない)
+async function applyEditArtworkChange(track) {
+  if (editingArtwork === undefined) return; // 変更していなければ何もしない
+  track.artworkBlob = editingArtwork; // null(削除)ならそのまま null に
+  artworkUrlCache.delete(track.id);
+  thumbUrlCache.delete(track.id);
+  thumbMap.delete(track.id);
+  await DB.deleteThumb(track.id); // 古い一覧用の小さな画像を消し、作り直す
+  track.artworkScanned = true;
+  if (track.artworkBlob) await saveThumb(track);
 }
 
 async function saveEditTrack() {
@@ -2733,6 +2772,7 @@ async function saveEditTrack() {
   EDIT_FIELDS.forEach(([key, id]) => { track[key] = key === 'year' ? year : val(id); });
   if (!track.artist) track.artist = UNKNOWN_ARTIST;
   track.readingsScanned = true; // 読みは自分で決めたので、ファイルのタグで上書きしない
+  await applyEditArtworkChange(track);
   await DB.updateTrack(track);
   markLibraryChanged();
   document.querySelectorAll('ul').forEach((ul) => { if (ul._v) updateVirtualWindow(ul, true); }); // 表示中の行を新しい内容に

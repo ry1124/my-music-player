@@ -455,6 +455,13 @@ body.mini-open .view:not(#view-nowplaying) { bottom: calc(116px + var(--safe-bot
 .form-check input { width: 22px; height: 22px; accent-color: var(--accent); }
 .settings-btn-row { padding: 10px 0; }
 .settings-action { border: 0; border-radius: 10px; padding: 10px 14px; background: var(--surface2); color: var(--accent); font-size: 15px; font-weight: 600; }
+.settings-action.danger { color: #ff453a; }
+
+/* 曲情報の編集画面: ジャケット写真の変更 */
+.edit-artwork-row { display: flex; align-items: center; gap: 14px; padding: 10px 0; }
+.edit-artwork-preview { width: 84px; height: 84px; border-radius: 10px; object-fit: cover; background: var(--surface2); flex-shrink: 0; }
+.edit-artwork-btns { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.edit-artwork-btns .settings-action { width: 100%; }
 
 /* 右へスワイプ → 次に再生 */
 .track-item { touch-action: pan-y; position: relative; overflow: hidden; }
