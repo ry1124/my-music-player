@@ -1696,6 +1696,7 @@ async function deleteTrackFromLibrary(trackId) {
   markLibraryChanged();
   renderTrackList(document.getElementById('search-input').value.trim());
   renderPlaylistList();
+  if (isPlaylistDetailActive()) openPlaylistDetail(currentPlaylistId, playlistDetailBackView); // 開いているプレイリストの中から削除したときも、閉じ直さず即座に消す
 }
 
 // ===== 自動の一覧(最近追加した曲 / 最近再生した曲) =====
@@ -1777,8 +1778,8 @@ function countMatches(text, re) {
   return m ? m.length : 0;
 }
 function autoSeason(track) {
-  // 「秋桜(コスモス)」は春の「桜」に数えない
-  const head = `${track.title || ''} ${track.album || ''}`.normalize('NFKC').replace(/秋桜/g, '秋');
+  // 「秋桜(コスモス)」は春の「桜」に数えない。「青春」は季節の「春」ではないので数えない
+  const head = `${track.title || ''} ${track.album || ''}`.normalize('NFKC').replace(/秋桜/g, '秋').replace(/青春/g, '');
   const scoreOf = (text) => SEASONS.map(d => ({ key: d.key, n: countMatches(text, d.re) })).sort((a, b) => b.n - a.n);
   let sc = scoreOf(head);
   const xm = sc.find(x => x.key === 'xmas');
@@ -1786,7 +1787,7 @@ function autoSeason(track) {
   if (sc[0].n > 0 && sc[0].n > sc[1].n) return sc[0].key;
   // 曲名で決まらないときは、歌詞に出てくる季節の言葉が多く、はっきり差がある場合だけ採用する
   if (sc[0].n === 0 && track.lyrics) {
-    sc = scoreOf(track.lyrics.normalize('NFKC').replace(/秋桜/g, '秋'));
+    sc = scoreOf(track.lyrics.normalize('NFKC').replace(/秋桜/g, '秋').replace(/青春/g, ''));
     if (sc[0].n >= 3 && sc[0].n >= sc[1].n * 2) return sc[0].key;
   }
   return '';
