@@ -56,11 +56,31 @@ const FastTags = (() => {
       const ds = pos + hdrLen;
       const end = ds + size;
       if (end > total || size <= 0) break; // サイズがおかしければ、それ以上は読めないので打ち切る
-      const unsupported = ver === 4 ? (fflags & 0x0d) : ver === 3 ? (fflags & 0x00e0) : false; // 圧縮・暗号化・未同期化は扱わない
-      if (!unsupported) onFrame(id, buf, (ver === 4 && (fflags & 0x01)) ? ds + 4 : ds, end, ver);
+      // 圧縮・暗号化のフレームは扱わない。グループ化の識別子・データ長の指示子(付いていれば)は、このあと読み飛ばす。
+      // v2.4のフレーム単位の非同期化(付いていれば)は、このあと解除する ― これを解除しないと、画像(JPEG等は0xFFを多用する)が壊れて見えることがある
+      const unsupported = ver === 4 ? (fflags & 0x0c) : ver === 3 ? (fflags & 0xc0) : false;
+      if (!unsupported) {
+        let body = buf.subarray(ds, end);
+        if (ver === 4 && (fflags & 0x02)) body = deUnsyncFrame(body);
+        let bs = 0;
+        if (ver === 4 && (fflags & 0x40)) bs += 1; // グループ化の識別子(1バイト)
+        if (ver === 3 && (fflags & 0x20)) bs += 1; // グループ化の識別子(1バイト、v2.3)
+        if (ver === 4 && (fflags & 0x01)) bs += 4; // データ長の指示子(4バイト)
+        onFrame(id, body, bs, body.length, ver);
+      }
       pos = end;
     }
     return buf;
+  }
+
+  // フレーム単位の非同期化(ID3v2.4)の解除: 0xFFの直後にある0x00を取り除く
+  function deUnsyncFrame(bytes) {
+    const out = [];
+    for (let i = 0; i < bytes.length; i++) {
+      out.push(bytes[i]);
+      if (bytes[i] === 0xff && bytes[i + 1] === 0x00) i++;
+    }
+    return new Uint8Array(out);
   }
 
   // ID3v2 のジャケット画像だけを { blob } で返す(歌詞などファイル種別の判定用に、今も単独で使う場面がある)

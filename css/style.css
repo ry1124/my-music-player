@@ -366,8 +366,9 @@ body.lyrics-expanded #view-nowplaying .np-lyrics { font-size: 23px; line-height:
 .app-version { font-size: 11px; margin-left: 6px; }
 .topbar-actions .icon-btn { padding: 6px 7px; display: flex; align-items: center; }
 .tab-icon { display: flex; }
-/* ミニプレイヤーが出ているときは、一覧の下端がその下に隠れてタップできなくならないよう、余白を広げる */
-body.mini-open .view:not(#view-nowplaying) { padding-bottom: calc(120px + var(--safe-bottom)); }
+/* ミニプレイヤーが出ているときは、画面自体の下端をミニプレイヤーの上で止める(スクロール領域を後ろに足すだけだと、
+   ちょうど画面に収まる量の内容のときにスクロールバーが出ず、隠れた分に気づけずボタンが押せないままになるため) */
+body.mini-open .view:not(#view-nowplaying) { bottom: calc(116px + var(--safe-bottom)); padding-bottom: 0; }
 .np-open .mini-player, .np-open .tabbar { display: none; }
 .np-open #view-nowplaying { padding-bottom: calc(24px + var(--safe-bottom)); }
 .view.has-index .search-bar, .view.has-index .play-row, .view.has-index .import-progress { margin-right: 26px; }

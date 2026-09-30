@@ -146,7 +146,7 @@ function refreshIndexTarget() {
   if (plain) updatePlainScrollbar(active);
 }
 // view-group-detail はアーティストの曲一覧のときだけ対象(年代/ジャンルはあいうえお順バーが出るので、plainは自動で out になる)
-const PLAIN_SCROLL_VIEWS = new Set(['view-playlists', 'view-playlist-detail', 'view-queue', 'view-season-folder', 'view-years', 'view-genres', 'view-group-detail']);
+const PLAIN_SCROLL_VIEWS = new Set(['view-playlists', 'view-playlist-detail', 'view-queue', 'view-season-folder', 'view-years', 'view-genres', 'view-group-detail', 'view-edit-track', 'view-settings']);
 
 // 見た目だけのスクロールバー(タップして飛ぶ機能は無い)。今の画面のスクロール量から、つまみの位置と大きさを決める
 function updatePlainScrollbar(view) {
@@ -811,12 +811,15 @@ function yearSortFn(a, b) {
 
 // 特撮ジャンルの曲を、シリーズ(ウルトラマン / 仮面ライダー / スーパー戦隊)にまとめる。アルバム名・曲名・アーティスト名に含まれる言葉で判定する
 const TOKUSATSU_GENRE_RE = /^(特撮|とくさつ|tokusatsu)$/;
-// スーパー戦隊は、「戦隊」「レンジャー」が付かない作品(ジェットマン・バイオマン等)もあるため、歴代の(戦隊名を除いた)チーム名を列挙する。
-// どれも「ウルトラ」「仮面」「ライダー」を含まないので、上の2つと混ざらない
+// どのシリーズも、「戦隊」「レンジャー」「ウルトラ」「仮面」「ライダー」のような共通の言葉が付かない作品(ジェットマン・ティガ・クウガ等)があるため、
+// 歴代の呼び名を列挙して補う。3つのリストの言葉どうしで重ならないように選んである(重なると誤って別シリーズに分類されてしまうため)
 const SENTAI_TEAM_NAMES = /ゴレンジャー|ジャッカー|バトルフィーバー|デンジマン|サンバルカン|ゴーグルファイブ|ダイナマン|バイオマン|チェンジマン|フラッシュマン|マスクマン|ライブマン|ターボレンジャー|ファイブマン|ジェットマン|ジュウレンジャー|ダイレンジャー|カクレンジャー|オーレンジャー|カーレンジャー|メガレンジャー|ギンガマン|ゴーゴーファイブ|タイムレンジャー|ガオレンジャー|ハリケンジャー|アバレンジャー|デカレンジャー|マジレンジャー|ボウケンジャー|ゲキレンジャー|ゴーオンジャー|シンケンジャー|ゴセイジャー|ゴーカイジャー|ゴーバスターズ|キョウリュウジャー|トッキュウジャー|ニンニンジャー|ジュウオウジャー|キュウレンジャー|ルパンレンジャー|パトレンジャー|リュウソウジャー|キラメイジャー|ゼンカイジャー|ドンブラザーズ|キングオージャー|ブンブンジャー/;
+// 「ダイナ」「ゼロ」「ギンガ」のように他シリーズの名前(ダイナマン・ゼロワン・ギンガマン等)に含まれてしまう短い呼び名は、あえて入れていない
+const ULTRA_HERO_NAMES = /ティガ|ガイア|コスモス|ネクサス|マックス|メビウス|エックス|オーブ|ジード|タイガ|トリガー|デッカー|ブレーザー|アーク|セブン|タロウ|レオ|アストラ|ゾフィー|ジャスティス/;
+const RIDER_HERO_NAMES = /クウガ|アギト|龍騎|ファイズ|ブレイド|響鬼|カブト|電王|キバ|ディケイド|ダブル|オーズ|フォーゼ|ウィザード|鎧武|ガイム|ドライブ|ゴースト|エグゼイド|ビルド|ジオウ|ゼロワン|セイバー|リバイス|ギーツ|ガッチャード/;
 const TOKUSATSU_SERIES = [
-  { label: 'ウルトラマン', re: /ウルトラ/ },
-  { label: '仮面ライダー', re: /仮面|ライダー/ },
+  { label: 'ウルトラマン', re: new RegExp(`ウルトラ|${ULTRA_HERO_NAMES.source}`) },
+  { label: '仮面ライダー', re: new RegExp(`仮面|ライダー|${RIDER_HERO_NAMES.source}`) },
   { label: 'スーパー戦隊', re: new RegExp(`戦隊|レンジャー|${SENTAI_TEAM_NAMES.source}`) }, // 「戦隊」「レンジャー」を含む題名 + 歴代チーム名(短い表記のみのタグにも対応)
 ];
 function isTokusatsu(track) {
@@ -925,6 +928,17 @@ function renderArtistList(filter = '') {
     if (b === '不明') return -1;
     return sectionSort(keyOf(a), keyOf(b));
   }, keyOf, '', filter);
+
+  // ライブラリと同じく、一覧の先頭に「再生 / シャッフル」を出す(今の絞り込みに一致する曲すべてが対象)
+  const listEl = document.getElementById('artist-list');
+  const old = listEl.querySelector('.play-row');
+  if (old) old.remove();
+  const f = filter.trim().toLowerCase();
+  const ids = tracks
+    .filter(t => !f || artistLabel(t).toLowerCase().includes(f) || t.title.toLowerCase().includes(f))
+    .slice().sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)))
+    .map(t => t.id);
+  if (ids.length > 0) listEl.insertBefore(buildPlayRow(ids), listEl.firstChild);
 }
 
 function openGroupDetail(label, groupTracks, backView) {
