@@ -39,7 +39,7 @@ html, body {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding-top: var(--safe-top);
-  padding-bottom: calc(64px + var(--safe-bottom));
+  padding-bottom: calc(84px + var(--safe-bottom)); /* タブバー(50px+安全域)の上に、余裕を持って空ける */
 }
 .view.active { display: flex; }
 

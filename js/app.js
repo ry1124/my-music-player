@@ -177,6 +177,15 @@ function bindUIEvents() {
     }, { passive: true });
   });
 
+  // 画面の高さが変わったとき(ミニプレイヤーの表示切り替え・回転・キーボードの開閉など)、
+  // 仮想スクロールの描画範囲・見た目だけのスクロールバーを、今の高さに合わせて描き直す
+  window.addEventListener('resize', () => {
+    const active = document.querySelector('.view.active');
+    if (!active) return;
+    active.querySelectorAll('ul').forEach((ul) => { if (ul._v) updateVirtualWindow(ul, true); });
+    refreshPlainScrollbarIfActive();
+  });
+
   const TAB_VIEW_MAP = {
     library: 'view-library',
     years: 'view-years',
@@ -2899,7 +2908,14 @@ function updateNowPlayingUI() {
 
 function showMiniPlayer() {
   document.getElementById('mini-player').classList.remove('hidden');
-  document.body.classList.add('mini-open'); // 一覧の下端が、ミニプレイヤーに隠れてタップできなくならないよう、余白を広げる
+  if (document.body.classList.contains('mini-open')) return; // 既に表示済みなら、下の再計算は不要
+  document.body.classList.add('mini-open'); // 一覧の下端が、ミニプレイヤーに隠れてタップできなくならないよう、画面自体の高さを詰める
+  // 高さが変わった直後なので、今見えている一覧の描画範囲・見た目だけのスクロールバーを、新しい高さに合わせ直す
+  const active = document.querySelector('.view.active');
+  if (active) {
+    active.querySelectorAll('ul').forEach((ul) => { if (ul._v) updateVirtualWindow(ul, true); });
+    refreshPlainScrollbarIfActive();
+  }
 }
 
 // ===== スリープタイマー =====
