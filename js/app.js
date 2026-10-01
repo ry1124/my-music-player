@@ -3350,9 +3350,7 @@ function updateMediaSession() {
   navigator.mediaSession.setActionHandler('pause', () => { wantsToPlay = false; audioEl.pause(); });
   navigator.mediaSession.setActionHandler('previoustrack', playPrev);
   navigator.mediaSession.setActionHandler('nexttrack', playNext);
-  try {
-    navigator.mediaSession.setActionHandler('seekto', (details) => {
-      if (details.seekTime != null) audioEl.currentTime = details.seekTime;
-    });
-  } catch (e) {}
+  // 「シーク(ドラッグして頭出し)」を登録すると、iOSが前へ/次へボタンの代わりにシークのボタンを
+  // 出してしまい、前へ/次へが使えなくなることがあるため、あえて登録しない
+  try { navigator.mediaSession.setActionHandler('seekto', null); } catch (e) {}
 }
