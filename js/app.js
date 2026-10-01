@@ -2383,6 +2383,9 @@ function attemptResume(tries = 5, hard = false) {
     setSource(el, track); // blobのURLを作り直す(古い参照のまま再生を頼んでも無音になることがあるため)
     el.currentTime = savedTime;
   }
+  // 曲の重ね(クロスフェード)の途中で一時停止すると、音量が下がった/上がりきっていない途中の値のまま
+  // 止まることがある。そのまま再開すると「再生はされるが音がほぼ聞こえない」状態になるため、必ず戻す
+  if (!jointBusy) setVolumeImmediate(el, 1);
   el.play().then(() => {
     resumeRetryTimer = null;
     if (!wantsToPlay) { el.pause(); return; } // 再開できた頃には、やっぱり止めたくなっていた場合
@@ -2619,6 +2622,8 @@ function togglePlayPause() {
     attemptResume();
   } else {
     wantsToPlay = false;
+    cancelJoint(); // 曲の重ね(クロスフェード)の途中で止めても、消えていく方を含めてきちんと止める
+    setVolumeImmediate(audioEl, 1); // フェードの途中の音量のまま、次に再開しないように
     audioEl.pause();
   }
 }
