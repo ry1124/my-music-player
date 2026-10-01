@@ -2361,17 +2361,44 @@ function prepareAudioEngine() {
 // 電話などで強制的に止められたときの再開。1回失敗しても、少し待って何回か試す
 // (iOSは、電話が終わった直後などは一瞬再生を拒否することがあるため)
 let resumeRetryTimer = null;
-function attemptResume(tries = 5) {
+// hard=true: 読み込み元(blobのURL)を作り直してから再生する。
+// iOSは、割り込み(電話・ロック画面)のあとに頼むと、見た目は「再生中」になるのに実際は無音のことがあるため、
+// 電話・ロック画面からの再開(＝割り込みから戻ってきたとき)は、最初からこちらを使う
+function attemptResume(tries = 5, hard = false) {
   clearTimeout(resumeRetryTimer);
   resumeRetryTimer = null;
   if (!wantsToPlay || !currentTrack || !audioEl.paused) return;
   prepareAudioEngine();
-  audioEl.play().then(() => {
+  const track = currentTrack;
+  const el = audioEl;
+  if (hard) {
+    const savedTime = el.currentTime;
+    setSource(el, track); // blobのURLを作り直す(古い参照のまま再生を頼んでも無音になることがあるため)
+    el.currentTime = savedTime;
+  }
+  el.play().then(() => {
     resumeRetryTimer = null;
-    if (!wantsToPlay) audioEl.pause(); // 再開できた頃には、やっぱり止めたくなっていた場合
+    if (!wantsToPlay) { el.pause(); return; } // 再開できた頃には、やっぱり止めたくなっていた場合
+    verifyProgressing(track, el, el.currentTime, tries);
   }).catch(() => {
-    if (tries > 1) resumeRetryTimer = setTimeout(() => attemptResume(tries - 1), 500);
+    if (tries > 1) resumeRetryTimer = setTimeout(() => attemptResume(tries - 1, true), 500);
   });
+}
+
+// iOSは「再生中」と返ってきても、実際には音が出ない(時刻が進まない)ことがある。
+// 少し待って本当に進んでいるか確認し、進んでいなければ音声の読み込み元を作り直して再試行する
+function verifyProgressing(track, el, startTime, tries) {
+  if (tries <= 1) return; // やり尽くした
+  setTimeout(() => {
+    if (currentTrack !== track || audioEl !== el || !wantsToPlay || el.paused) return; // 状況が変わっていれば何もしない
+    if (el.currentTime - startTime > 0.1) return; // ちゃんと進んでいる
+    const savedTime = el.currentTime;
+    setSource(el, track); // blobのURLを作り直す(古い参照が無効になっている場合の対策)
+    el.currentTime = savedTime;
+    el.play().then(() => verifyProgressing(track, el, el.currentTime, tries - 1)).catch(() => {
+      if (tries > 2) resumeRetryTimer = setTimeout(() => attemptResume(tries - 2, true), 500);
+    });
+  }, 1200);
 }
 
 // ---- フェード(クロスフェード): AudioContextを使わず、<audio>のvolumeを直接動かす ----
@@ -3069,10 +3096,10 @@ async function openSleepTimerSheet() {
 // アプリが裏に回る/閉じられる直前にも保存する
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { savePlaybackState(true); return; }
-  attemptResume(); // 電話などで強制的に止められて、画面に戻ってきたときは、自動で再開する
+  attemptResume(5, true); // 電話などで強制的に止められて、画面に戻ってきたときは、自動で再開する
 });
 window.addEventListener('pagehide', () => savePlaybackState(true));
-window.addEventListener('focus', () => attemptResume()); // 電話の終了直後など、visibilitychangeが起きない場合の保険
+window.addEventListener('focus', () => attemptResume(5, true)); // 電話の終了直後など、visibilitychangeが起きない場合の保険
 
 function bindAudioEvents() {
   // 2つのaudio要素の両方に付けて、今、曲を鳴らしている方のイベントだけ処理する
@@ -3307,7 +3334,7 @@ function updateMediaSession() {
     album: currentTrack.album || '',
     artwork,
   });
-  navigator.mediaSession.setActionHandler('play', () => { wantsToPlay = true; attemptResume(); });
+  navigator.mediaSession.setActionHandler('play', () => { wantsToPlay = true; attemptResume(5, true); });
   navigator.mediaSession.setActionHandler('pause', () => { wantsToPlay = false; audioEl.pause(); });
   navigator.mediaSession.setActionHandler('previoustrack', playPrev);
   navigator.mediaSession.setActionHandler('nexttrack', playNext);
