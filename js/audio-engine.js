@@ -83,33 +83,40 @@ const AudioEngine = (() => {
     return probe.decodeAudioData(await blob.arrayBuffer());
   }
 
-  // Float32(-1〜1)の音をInt16のPCMに変換する(MP3エンコーダに渡す形式)
-  function toInt16(float32) {
-    const out = new Int16Array(float32.length);
-    for (let i = 0; i < float32.length; i++) {
-      const s = Math.max(-1, Math.min(1, float32[i]));
-      out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  // MP3への変換(重いので、画面が固まらないよう別スレッド(Worker)にやらせる)
+  let mp3Worker = null;
+  let mp3ReqId = 0;
+  const mp3Pending = new Map(); // リクエストid → { resolve, reject }
+  function getMp3Worker() {
+    if (!mp3Worker) {
+      mp3Worker = new Worker('js/mp3-worker.js');
+      mp3Worker.onmessage = (e) => {
+        const { id, buffer, error } = e.data;
+        const p = mp3Pending.get(id);
+        if (!p) return;
+        mp3Pending.delete(id);
+        if (error) p.reject(new Error(error));
+        else p.resolve(new Blob([buffer], { type: 'audio/mpeg' }));
+      };
+      mp3Worker.onerror = () => {
+        mp3Pending.forEach(p => p.reject(new Error('MP3への変換に失敗しました')));
+        mp3Pending.clear();
+        mp3Worker = null; // 次回また作り直す
+      };
     }
-    return out;
+    return mp3Worker;
   }
-
-  const MP3_KBPS = 160;
   function encodeMp3(buf) {
-    const ch = Math.min(2, buf.numberOfChannels);
-    const encoder = new lamejs.Mp3Encoder(ch, buf.sampleRate, MP3_KBPS);
-    const left = toInt16(buf.getChannelData(0));
-    const right = ch > 1 ? toInt16(buf.getChannelData(1)) : null;
-    const block = 1152; // lamejsが1回に受け取れる単位
-    const chunks = [];
-    for (let i = 0; i < left.length; i += block) {
-      const l = left.subarray(i, i + block);
-      const r = right ? right.subarray(i, i + block) : undefined;
-      const part = right ? encoder.encodeBuffer(l, r) : encoder.encodeBuffer(l);
-      if (part.length > 0) chunks.push(part);
-    }
-    const end = encoder.flush();
-    if (end.length > 0) chunks.push(end);
-    return new Blob(chunks, { type: 'audio/mpeg' });
+    return new Promise((resolve, reject) => {
+      const w = getMp3Worker();
+      const id = ++mp3ReqId;
+      mp3Pending.set(id, { resolve, reject });
+      const ch = Math.min(2, buf.numberOfChannels);
+      const left = buf.getChannelData(0).slice(); // コピーしてから渡す(転送すると元のAudioBufferを壊すため)
+      const right = ch > 1 ? buf.getChannelData(1).slice() : null;
+      const transfer = right ? [left.buffer, right.buffer] : [left.buffer];
+      w.postMessage({ id, left, right, sampleRate: buf.sampleRate }, transfer);
+    });
   }
 
   // gainDb(dB)を波形に実際にかけた、新しい音声ファイル(MP3)を作って返す

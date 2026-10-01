@@ -18,6 +18,7 @@ const CORE_ASSETS = [
   './icons/default-artwork.png',
   './js/jsmediatags.min.js',
   './js/lamejs.min.js',
+  './js/mp3-worker.js',
 ];
 
 self.addEventListener('install', (event) => {
