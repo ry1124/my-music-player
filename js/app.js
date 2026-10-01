@@ -1532,7 +1532,6 @@ function fillTrackList(listEl, list, ids) {
 // 必ずこの3つ経由で呼ぶことで、再生中だったときだけ、閉じたあとに自動で再開する
 function dialogWasPlaying() { return !!(currentTrack && !audioEl.paused); }
 function resumePlaybackAfterDialog() {
-  AudioEngine.resume();
   if (audioEl.paused) audioEl.play().catch(() => {});
 }
 function dialogAlert(msg) {
@@ -2278,10 +2277,15 @@ let jointStartTimer = null; // ギャップレス: 曲の終わりの直前に�
 let jointEndTimer = null;   // 重ねが終わったら、前の曲を止める予約
 let preloaded = { el: null, trackId: null }; // 次の曲を先に読み込んでおいた要素と曲
 
+// 「音量の自動そろえ」がオンで、音量を調整済みのファイルができていれば、そちらを再生する(元のファイルはそのまま)
+function playbackBlob(track) {
+  if (Settings.get('soundCheck') && track.normBlob && track.normGainDb === (track.gainDb || 0)) return track.normBlob;
+  return track.fileBlob;
+}
 function setSource(el, track) {
   const old = audioUrls.get(el);
   if (old) URL.revokeObjectURL(old);
-  const url = URL.createObjectURL(track.fileBlob);
+  const url = URL.createObjectURL(playbackBlob(track));
   audioUrls.set(el, url);
   el.src = url;
   if (preloaded.el === el) preloaded = { el: null, trackId: null };
@@ -2299,22 +2303,22 @@ function loadAndPlay(track, index, opts = {}) {
   if (!(preloaded.el === el && preloaded.trackId === track.id)) setSource(el, track);
   else preloaded = { el: null, trackId: null };
   prepareAudioEngine();
-  applyTrackGain(el, track);
+  ensureNormalized(track);
   if (opts.joint) {
     const oldEl = audioEl;
     audioEl = el;
     const fadeSec = opts.fadeSec || 0;
-    AudioEngine.fade(el, true, fadeSec);
-    if (fadeSec > 0) AudioEngine.fade(oldEl, false, fadeSec);
+    fadeVolume(el, true, fadeSec);
+    if (fadeSec > 0) fadeVolume(oldEl, false, fadeSec);
     jointEndTimer = setTimeout(() => {
       oldEl.pause();
-      AudioEngine.setFade(oldEl, 1);
+      setVolumeImmediate(oldEl, 1);
       if (jointOldEl === oldEl) jointOldEl = null;
       jointBusy = false;
       jointEndTimer = null;
     }, (fadeSec + 0.2) * 1000);
   } else {
-    AudioEngine.setFade(el, 1);
+    setVolumeImmediate(el, 1);
   }
   const started = el.play();
   if (opts.joint && started && started.catch) started.catch(() => abortJoint(el, prev));
@@ -2349,19 +2353,62 @@ function unlockSecondElement() {
 }
 
 function prepareAudioEngine() {
-  if (AudioEngine.needed()) {
-    if (AudioEngine.ensure([audioA, audioB])) unlockSecondElement();
-  }
-  AudioEngine.resume();
+  if (Settings.get('joint') !== 'off') unlockSecondElement();
 }
 
-function applyTrackGain(el, track) {
-  if (!AudioEngine.ready(el)) return;
-  const on = !!Settings.get('soundCheck');
-  AudioEngine.setTrackGainDb(el, on && typeof track.gainDb === 'number' ? track.gainDb : 0);
-  if (on && typeof track.gainDb !== 'number') {
-    analyzeTrackLoudness(track).then(() => { if (currentTrack === track && audioEl === el) applyTrackGain(el, track); });
-  }
+// ---- フェード(クロスフェード): AudioContextを使わず、<audio>のvolumeを直接動かす ----
+// (AudioContext経由にすると、ロック画面でiOSに止められて無音になるため)
+const fadeRaf = new Map(); // audio要素 → 実行中のrequestAnimationFrame id
+function cancelFade(el) {
+  if (fadeRaf.has(el)) { cancelAnimationFrame(fadeRaf.get(el)); fadeRaf.delete(el); }
+}
+function setVolumeImmediate(el, value) { cancelFade(el); el.volume = value; }
+function fadeVolume(el, up, sec) {
+  cancelFade(el);
+  if (sec <= 0.001) { el.volume = up ? 1 : 0; return; }
+  const from = up ? 0 : 1;
+  const to = up ? 1 : 0;
+  el.volume = from;
+  const start = performance.now();
+  const dur = sec * 1000;
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / dur);
+    const curve = up ? Math.sin(t * Math.PI / 2) : Math.cos(t * Math.PI / 2); // 等パワーカーブ
+    el.volume = Math.max(0, Math.min(1, from + (to - from) * curve)); // 浮動小数の誤差で0〜1を超えないように
+
+    if (t < 1) fadeRaf.set(el, requestAnimationFrame(step));
+    else fadeRaf.delete(el);
+  };
+  fadeRaf.set(el, requestAnimationFrame(step));
+}
+
+// ---- 音量の自動そろえ: 波形を加工した音声ファイルを、曲ごとに1回だけ作って保存する ----
+const normalizingInFlight = new Map(); // 曲のid → 作成中のPromise
+function renderNormalizedForTrack(track) {
+  if (normalizingInFlight.has(track.id)) return normalizingInFlight.get(track.id);
+  const pr = (async () => {
+    try {
+      const gainDb = track.gainDb || 0;
+      // ほぼ差が無い曲は、わざわざ作り直さず元のファイルのまま鳴らす
+      track.normBlob = Math.abs(gainDb) >= 0.5 ? await AudioEngine.renderNormalized(track.fileBlob, gainDb) : null;
+      track.normGainDb = gainDb;
+      await DB.updateTrack(track);
+    } catch (err) {
+      console.error('音量を調整したファイルの作成に失敗:', track.title, err);
+      track.normGainDb = track.gainDb; // 今回の起動中は、同じ曲を何度も試さない(保存はしない)
+    } finally {
+      normalizingInFlight.delete(track.id);
+    }
+  })();
+  normalizingInFlight.set(track.id, pr);
+  return pr;
+}
+// 再生を始めるとき・設定を変えたときに呼ぶ。今の再生には間に合わなくても、次に鳴らすときのために作っておく
+function ensureNormalized(track) {
+  if (!Settings.get('soundCheck')) return;
+  if (typeof track.gainDb !== 'number') { analyzeTrackLoudness(track).then(() => ensureNormalized(track)); return; }
+  if (track.normGainDb === track.gainDb) return;
+  renderNormalizedForTrack(track);
 }
 
 const loudnessInFlight = new Map(); // 曲のid → 解析中のPromise
@@ -2384,24 +2431,27 @@ function analyzeTrackLoudness(track) {
 }
 
 let analyzingAll = false;
+const normalizeDone = (t) => typeof t.gainDb === 'number' && t.normGainDb === t.gainDb;
 function updateLoudnessStatus() {
   const el = document.getElementById('loudness-status');
   if (!el || analyzingAll) return;
-  const done = tracks.filter(t => typeof t.gainDb === 'number').length;
-  el.textContent = `解析済み ${done} / ${tracks.length}曲`;
+  const done = tracks.filter(normalizeDone).length;
+  el.textContent = `処理済み ${done} / ${tracks.length}曲`;
 }
 async function analyzeAllLoudness() {
   if (analyzingAll) return;
-  const targets = tracks.filter(t => typeof t.gainDb !== 'number');
-  if (targets.length === 0) { dialogAlert('すべての曲を解析済みです'); return; }
-  if (!dialogConfirm(`${targets.length}曲の音量を解析します。曲数によっては数分〜数十分かかります。アプリを開いたまま待つ必要があります。始めますか?`)) return;
+  const targets = tracks.filter(t => !normalizeDone(t));
+  if (targets.length === 0) { dialogAlert('すべての曲の処理が済んでいます'); return; }
+  if (!dialogConfirm(`${targets.length}曲の音量を解析・調整します。曲数によっては数分〜数十分かかります。アプリを開いたまま待つ必要があります。始めますか?`)) return;
   analyzingAll = true;
   const btn = document.getElementById('btn-analyze-loudness');
   const status = document.getElementById('loudness-status');
   btn.disabled = true;
   for (let i = 0; i < targets.length; i++) {
-    status.textContent = `解析中... ${i + 1} / ${targets.length}曲`;
-    await analyzeTrackLoudness(targets[i]);
+    status.textContent = `処理中... ${i + 1} / ${targets.length}曲`;
+    const t = targets[i];
+    if (typeof t.gainDb !== 'number') await analyzeTrackLoudness(t);
+    if (t.normGainDb !== t.gainDb) await renderNormalizedForTrack(t);
   }
   analyzingAll = false;
   btn.disabled = false;
@@ -2410,19 +2460,9 @@ async function analyzeAllLoudness() {
 
 // 設定が変わったとき。特別な処理が要る設定なら、ここ(画面を触った直後)で準備する
 function onAudioSettingsChanged() {
-  if (AudioEngine.needed()) {
-    if (!AudioEngine.ensure([audioA, audioB])) {
-      dialogAlert('この端末では、音声の特別な処理を使えません');
-      Settings.set('joint', 'off');
-      Settings.set('soundCheck', false);
-      if (settingsUIRefresh) settingsUIRefresh();
-      return;
-    }
-    AudioEngine.resume();
-    unlockSecondElement();
-  }
-  if (Settings.get('joint') === 'off') cancelJoint();
-  if (currentTrack) applyTrackGain(audioEl, currentTrack);
+  if (Settings.get('joint') !== 'off') unlockSecondElement();
+  else cancelJoint();
+  if (currentTrack) ensureNormalized(currentTrack);
 }
 
 // ---- 曲の重ね ----
@@ -2446,7 +2486,7 @@ function abortJoint(newEl, prev) {
   jointOldEl = null;
   jointBusy = false;
   newEl.pause();
-  AudioEngine.setFade(oldEl, 1);
+  setVolumeImmediate(oldEl, 1);
   audioEl = oldEl;
   currentTrack = prev.track;
   currentIndex = prev.index;
@@ -2464,7 +2504,7 @@ const otherElementOf = (el) => (el === audioA ? audioB : audioA);
 function cancelJoint() {
   clearTimeout(jointStartTimer); jointStartTimer = null;
   clearTimeout(jointEndTimer); jointEndTimer = null;
-  if (jointOldEl) { jointOldEl.pause(); AudioEngine.setFade(jointOldEl, 1); jointOldEl = null; }
+  if (jointOldEl) { jointOldEl.pause(); setVolumeImmediate(jointOldEl, 1); jointOldEl = null; }
   jointBusy = false;
 }
 function clearJointStartTimer() { clearTimeout(jointStartTimer); jointStartTimer = null; }
@@ -2495,7 +2535,7 @@ function startJoint(fadeSec) {
 // 再生中の曲の残りが少なくなったら、次の曲を先に読み込み、重ねる(timeupdate から、約0.25秒ごとに呼ぶ)
 function checkJoint() {
   const mode = Settings.get('joint');
-  if (mode === 'off' || jointDisabled || jointBusy || !AudioEngine.ready(audioEl) || audioEl.paused || repeatMode === 'one') return;
+  if (mode === 'off' || jointDisabled || jointBusy || audioEl.paused || repeatMode === 'one') return;
   const d = audioEl.duration;
   if (!d || !isFinite(d)) return;
   const remaining = d - audioEl.currentTime;
@@ -2524,7 +2564,6 @@ function togglePlayPause() {
   if (!currentTrack) return;
   if (audioEl.paused) {
     prepareAudioEngine(); // 前回の続きから再生したときなど、まだ準備していない特別な音声処理を、ここ(画面を触った直後)で始める
-    applyTrackGain(audioEl, currentTrack);
     audioEl.play().catch(() => {});
   } else audioEl.pause();
 }

@@ -17,6 +17,7 @@ const CORE_ASSETS = [
   './icons/icon-512.png',
   './icons/default-artwork.png',
   './js/jsmediatags.min.js',
+  './js/lamejs.min.js',
 ];
 
 self.addEventListener('install', (event) => {
