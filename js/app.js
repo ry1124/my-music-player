@@ -2270,6 +2270,7 @@ function playTrackById(id, queueIds) {
 }
 
 let playCounted = false; // 今の再生を、再生回数に数えたか
+let wantsToPlay = false; // 最後に自分で選んだ意図が「再生」か「一時停止」か(電話などで強制的に止められたのと、自分で止めたのを見分けるため)
 let jointDisabled = false;  // 2つめの要素で再生できなかった端末では、その起動中は重ねを使わない
 let jointBusy = false;      // 曲の重ね(クロスフェード/ギャップレス)の最中
 let jointOldEl = null;      // 重ねの最中に、消えていく方の要素
@@ -2297,6 +2298,7 @@ function loadAndPlay(track, index, opts = {}) {
   const prev = { track: currentTrack, index: currentIndex };
   currentTrack = track;
   playCounted = false;
+  wantsToPlay = true;
   currentIndex = index !== undefined ? index : currentQueue.indexOf(track.id);
   if (!opts.joint) cancelJoint();
   const el = opts.joint ? opts.el : audioEl;
@@ -2354,6 +2356,22 @@ function unlockSecondElement() {
 
 function prepareAudioEngine() {
   if (Settings.get('joint') !== 'off') unlockSecondElement();
+}
+
+// 電話などで強制的に止められたときの再開。1回失敗しても、少し待って何回か試す
+// (iOSは、電話が終わった直後などは一瞬再生を拒否することがあるため)
+let resumeRetryTimer = null;
+function attemptResume(tries = 5) {
+  clearTimeout(resumeRetryTimer);
+  resumeRetryTimer = null;
+  if (!wantsToPlay || !currentTrack || !audioEl.paused) return;
+  prepareAudioEngine();
+  audioEl.play().then(() => {
+    resumeRetryTimer = null;
+    if (!wantsToPlay) audioEl.pause(); // 再開できた頃には、やっぱり止めたくなっていた場合
+  }).catch(() => {
+    if (tries > 1) resumeRetryTimer = setTimeout(() => attemptResume(tries - 1), 500);
+  });
 }
 
 // ---- フェード(クロスフェード): AudioContextを使わず、<audio>のvolumeを直接動かす ----
@@ -2563,9 +2581,12 @@ function refreshPlayingHighlight() {
 function togglePlayPause() {
   if (!currentTrack) return;
   if (audioEl.paused) {
-    prepareAudioEngine(); // 前回の続きから再生したときなど、まだ準備していない特別な音声処理を、ここ(画面を触った直後)で始める
-    audioEl.play().catch(() => {});
-  } else audioEl.pause();
+    wantsToPlay = true;
+    attemptResume();
+  } else {
+    wantsToPlay = false;
+    audioEl.pause();
+  }
 }
 
 function playNext() {
@@ -3046,8 +3067,12 @@ async function openSleepTimerSheet() {
 }
 
 // アプリが裏に回る/閉じられる直前にも保存する
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') savePlaybackState(true); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { savePlaybackState(true); return; }
+  attemptResume(); // 電話などで強制的に止められて、画面に戻ってきたときは、自動で再開する
+});
 window.addEventListener('pagehide', () => savePlaybackState(true));
+window.addEventListener('focus', () => attemptResume()); // 電話の終了直後など、visibilitychangeが起きない場合の保険
 
 function bindAudioEvents() {
   // 2つのaudio要素の両方に付けて、今、曲を鳴らしている方のイベントだけ処理する
@@ -3282,8 +3307,8 @@ function updateMediaSession() {
     album: currentTrack.album || '',
     artwork,
   });
-  navigator.mediaSession.setActionHandler('play', () => audioEl.play().catch(() => {}));
-  navigator.mediaSession.setActionHandler('pause', () => audioEl.pause());
+  navigator.mediaSession.setActionHandler('play', () => { wantsToPlay = true; attemptResume(); });
+  navigator.mediaSession.setActionHandler('pause', () => { wantsToPlay = false; audioEl.pause(); });
   navigator.mediaSession.setActionHandler('previoustrack', playPrev);
   navigator.mediaSession.setActionHandler('nexttrack', playNext);
   try {
