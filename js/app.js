@@ -26,6 +26,12 @@ audioB.setAttribute('playsinline', '');
 let audioEl = audioA;
 const audioUrls = new Map(); // audio要素 → セット中のobject URL
 
+// 音声セッションの種類を「再生」にする(iOS 17+)。これを設定しないと、電話などの割り込みのあと
+// 再生中の表示になっても実際には音が出ない(音声の出力先が正しく戻らない)ことがある
+if ('audioSession' in navigator) {
+  try { navigator.audioSession.type = 'playback'; } catch (e) { /* 対応していない端末では無視 */ }
+}
+
 // ===== アイコン(単色SVG。currentColor で色を変える) =====
 const svgIcon = (path, size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" aria-hidden="true">${path}</svg>`;
 const ICON_PATHS = {
@@ -2372,6 +2378,7 @@ function attemptResume(tries = 5, hard = false) {
   const track = currentTrack;
   const el = audioEl;
   if (hard) {
+    if ('audioSession' in navigator) { try { navigator.audioSession.type = 'playback'; } catch (e) { /* 無視 */ } }
     const savedTime = el.currentTime;
     setSource(el, track); // blobのURLを作り直す(古い参照のまま再生を頼んでも無音になることがあるため)
     el.currentTime = savedTime;
