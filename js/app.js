@@ -2017,7 +2017,7 @@ async function estimateLyricTiming(track) {
   } catch (err) {
     console.error('歌詞タイミングの推定に失敗:', track.title, err);
     hideToast();
-    dialogAlert('この曲は解析できませんでした(対応していない形式の可能性があります)');
+    dialogAlert(`この曲は解析できませんでした: ${err && err.message ? err.message : err}`);
     return;
   }
   hideToast();
