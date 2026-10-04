@@ -2010,14 +2010,17 @@ async function estimateLyricTiming(track) {
   const lines = (track.lyrics || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (lines.length === 0) { dialogAlert('この曲には歌詞がありません'); return; }
   if (!dialogConfirm('歌詞のタイミングを、音量の変化から推定します。あくまで目安で、実際の歌とずれることがあります。よろしいですか?')) return;
+  showToast('解析中です。曲の長さによっては数秒〜十数秒かかります…', 20000); // 「反応していない」と誤解されないよう、はっきり出しておく
   let segments;
   try {
     segments = await AudioEngine.detectActiveSegments(track.fileBlob);
   } catch (err) {
     console.error('歌詞タイミングの推定に失敗:', track.title, err);
+    hideToast();
     dialogAlert('この曲は解析できませんでした(対応していない形式の可能性があります)');
     return;
   }
+  hideToast();
   track.syncedLyrics = distributeLyricLinesOverSegments(lines, segments, track.duration || 0);
   track.lyrics = lines.join('\n');
   track.lyricOffset = 0;
@@ -3398,13 +3401,18 @@ function bindSwipeToPlayNext(listEl) {
 }
 
 // ===== 再生待ち(次に再生 / 最後に再生 / 再生待ち画面) =====
-function showToast(text) {
+function showToast(text, duration = 1600) {
   let el = document.getElementById('toast');
   if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; document.body.appendChild(el); }
   el.textContent = text;
   el.classList.add('show');
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => el.classList.remove('show'), 1600);
+  showToast._t = setTimeout(() => el.classList.remove('show'), duration);
+}
+function hideToast() {
+  clearTimeout(showToast._t);
+  const el = document.getElementById('toast');
+  if (el) el.classList.remove('show');
 }
 
 // next=true: 今の曲の次に入れる / false: 再生待ちの最後に入れる。何も再生していなければ、その曲を再生し始める

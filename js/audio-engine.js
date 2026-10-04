@@ -89,11 +89,13 @@ const AudioEngine = (() => {
     const n = Math.floor(data.length / hop);
     if (n === 0) return [];
     const db = new Array(n);
+    const CHUNK = 500; // 曲が長くても、途中で画面(再生中の操作)に処理を返しながら進める
     for (let i = 0; i < n; i++) {
       let sum = 0;
       const start = i * hop;
       for (let j = start; j < start + hop; j++) sum += data[j] * data[j];
       db[i] = 10 * Math.log10(sum / hop || 1e-12);
+      if (i % CHUNK === CHUNK - 1) await new Promise((r) => requestAnimationFrame(r));
     }
     // 曲全体の音量の中央値から一定以上静かな区間を、無音/間奏とみなす
     const sorted = db.slice().sort((a, b) => a - b);
