@@ -514,7 +514,10 @@ async function handleFilesSelected(fileList) {
   };
 
   // 区切りごとに待たず、空いた分から次の曲を始める(遅い曲が1つあっても、全体が止まらない)
+  // ファイルが小さいと読み込みがマイクロタスクだけで終わり、画面の描画・タップへの反応が
+  // 後回しにされて「固まったように」見えることがあるため、何曲かに1回、画面に処理を返す
   let nextIndex = 0;
+  let sinceYield = 0;
   const worker = async () => {
     while (nextIndex < targets.length) {
       const i = nextIndex++;
@@ -528,6 +531,8 @@ async function handleFilesSelected(fileList) {
         failures.push(`${file.name}(${err && err.message ? err.message : err})`);
       } finally {
         updateProgress(file.name);
+        sinceYield++;
+        if (sinceYield >= 5) { sinceYield = 0; await new Promise(r => setTimeout(r, 0)); }
       }
     }
   };
@@ -554,6 +559,16 @@ function readTags(file, only) {
       resolve({});
       return;
     }
+    let done = false;
+    // jsmediatagsは、壊れた/特殊なファイルでonSuccess・onErrorのどちらも呼ばないまま固まることがある。
+    // そうなると取り込み全体が止まって見えるため、保険として時間切れで諦める
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      tagReadErrors.push(`${file.name}: タグの読み取りが時間切れ(ファイルが壊れている可能性)`);
+      resolve({});
+    }, 8000);
+    const finish = (val) => { if (done) return; done = true; clearTimeout(timer); resolve(val); };
     const reader = new jsmediatags.Reader(file);
     if (only) reader.setTagsToRead(only);
     reader.read({
@@ -562,12 +577,12 @@ function readTags(file, only) {
         if (!tags.title && !tags.artist && !tags.album) {
           tagReadErrors.push(`${file.name}: タグ形式=${tag.type || '不明'}だが中身が空(ファイルにタグ情報が無い可能性)`);
         }
-        resolve(tags);
+        finish(tags);
       },
       onError: (err) => {
         const reason = err && (err.type ? `${err.type}${err.info ? ':' + err.info : ''}` : err.message);
         tagReadErrors.push(`${file.name}: 読取エラー(${reason || '不明'})`);
-        resolve({});
+        finish({});
       },
     });
   });
