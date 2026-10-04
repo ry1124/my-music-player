@@ -917,15 +917,21 @@ function prerenderGroupLists() {
 
 // 「名前 + 曲数 + ジャケット」の行の一覧を、HTML文字列で一括生成する。クリックは一覧全体で1回だけ受ける
 // rows: [{ name, count, artUrl, section, onClick }]
-function fillGroupRows(listEl, rows) {
+// sectioned=true のときだけ、頭文字ごとの見出し行(あ・か・さ…)を挟む(あいうえお順の本物の索引バーが出る一覧だけで使う)
+function fillGroupRows(listEl, rows, sectioned = false) {
   clearTimeout(listEl._renderTimer); // 曲一覧の段階描画が残っていれば止める
   listEl._flushRows = null;
   listEl._rows = rows;
-  listEl.innerHTML = rows.map((r, i) =>
-    `<li class="playlist-item" data-i="${i}" data-section="${esc(r.section)}">` +
-    `<img class="playlist-artwork" loading="lazy" decoding="async" src="${r.artUrl}" alt="">` +
-    `<div class="track-meta"><div class="playlist-name">${esc(r.name)}</div><div class="playlist-count">${r.count}曲</div></div></li>`
-  ).join('');
+  let lastSection = null;
+  listEl.innerHTML = rows.map((r, i) => {
+    // section が無い行(「すべての曲」などの固定行)は、見出しを挟まず、直前のセクションも更新しない
+    const header = (sectioned && r.section && r.section !== lastSection) ? `<li class="section-header-row" data-section="${esc(r.section)}">${esc(r.section)}</li>` : '';
+    if (r.section) lastSection = r.section;
+    return header +
+      `<li class="playlist-item" data-i="${i}" data-section="${esc(r.section)}">` +
+      `<img class="playlist-artwork" loading="lazy" decoding="async" src="${r.artUrl}" alt="">` +
+      `<div class="track-meta"><div class="playlist-name">${esc(r.name)}</div><div class="playlist-count">${r.count}曲</div></div></li>`;
+  }).join('');
   refreshPlainScrollbarIfActive();
   if (listEl._rowsBound) return;
   listEl._rowsBound = true;
@@ -962,7 +968,8 @@ function renderGroupList(listElId, groupFn, sortFn, keyFn, cacheKey = '', filter
       onClick: () => openGroupDetail(label, groupTracks, backView),
     };
   });
-  fillGroupRows(listEl, rows);
+  // artist-list / album-list だけ、本物のあいうえお順の索引バーが出る(year-list/genre-listは年・ジャンル順で、索引とは合わないため挟まない)
+  fillGroupRows(listEl, rows, listElId === 'artist-list' || listElId === 'album-list');
 }
 
 function renderYearList() { renderGroupList('year-list', yearLabel, yearSortFn, null, yearSortOrder); }
@@ -1057,10 +1064,15 @@ function setGroupMode(mode) {
   refreshIndexTarget();
 }
 
+// group-detail-list は、年代からの絞り込みと、ジャンル→アルバムの曲一覧の両方で使う。
+// どちらも、あいうえお順の本物の索引バーが出る(refreshIndexTargetの判定と合わせること)ので、見出し行を挟む
+function groupDetailHasIndex() {
+  return lastGroupListView === 'view-years' || (lastGroupListView === 'view-genres' && genreCtx && genreCtx.album !== null);
+}
 function renderGroupDetailList(list) {
   setGroupMode('tracks');
   const listEl = document.getElementById('group-detail-list');
-  fillTrackList(listEl, list, list.map(t => t.id));
+  fillTrackList(listEl, list, list.map(t => t.id), groupDetailHasIndex());
   refreshPlainScrollbarIfActive();
 }
 
@@ -1098,18 +1110,19 @@ function renderGenreAlbumList(genre, groupTracks) {
     onClick,
   });
   // 特撮ジャンルなら、アルバム一覧の前に「ウルトラマン」「仮面ライダー」「スーパー戦隊」の行を出す
+  // (「すべての曲」と合わせて固定行なので、あいうえお順の見出しには含めない)
   const seriesRows = [];
   if (groupTracks.some(isTokusatsu)) {
     TOKUSATSU_SERIES.forEach((d) => {
       const list = groupTracks.filter(t => tokusatsuSeries(t) === d.label);
-      if (list.length > 0) seriesRows.push(toRow(d.label, list, () => openGenreAlbumTracks(d.label, list)));
+      if (list.length > 0) seriesRows.push({ ...toRow(d.label, list, () => openGenreAlbumTracks(d.label, list)), section: null });
     });
   }
   fillGroupRows(listEl, [
-    toRow('すべての曲', groupTracks, () => openGenreAlbumTracks('すべての曲', groupTracks)),
+    { ...toRow('すべての曲', groupTracks, () => openGenreAlbumTracks('すべての曲', groupTracks)), section: null },
     ...seriesRows,
     ...albums.map(a => toRow(a, groups.get(a), () => openGenreAlbumTracks(a, groups.get(a)))),
-  ]);
+  ], true);
 }
 
 function openGenreAlbumTracks(albumName, list) {
