@@ -302,6 +302,8 @@ function bindUIEvents() {
     editingArtwork = null;
     updateEditArtworkPreview(editingTrack);
   });
+  document.getElementById('btn-edit-genre-pick').addEventListener('click', openGenrePicker);
+  document.getElementById('btn-edit-year-pick').addEventListener('click', openYearPicker);
   document.getElementById('btn-back-queue').addEventListener('click', () => showView('view-nowplaying'));
   const queueListEl = document.getElementById('queue-list');
   queueListEl.addEventListener('click', (e) => {
@@ -1339,6 +1341,7 @@ function hapticTick() {
 // iOS標準の一覧インデックスと同様: 文字1つ1つが独立した当たり判定を持ち、指が別の文字に移るたびに触覚+ジャンプする
 function setupIndexBar() {
   const bar = document.getElementById('index-bar');
+  const bubble = document.getElementById('index-bubble');
   const spans = INDEX_LABELS.map((l) => {
     const span = document.createElement('span');
     span.textContent = l;
@@ -1356,6 +1359,8 @@ function setupIndexBar() {
     const { label, i } = labelAt(clientY);
     bar.classList.add('touching');
     spans.forEach((sp, k) => sp.classList.toggle('current', k === i));
+    bubble.textContent = label;
+    bubble.classList.remove('hidden');
     if (label !== lastLabel) { // 文字が変わったときだけ
       lastLabel = label;
       hapticTick();
@@ -1366,6 +1371,7 @@ function setupIndexBar() {
     lastLabel = null;
     bar.classList.remove('touching');
     spans.forEach(sp => sp.classList.remove('current'));
+    bubble.classList.add('hidden');
   };
 
   const onTouch = (e) => { e.preventDefault(); touchAt(e.touches[0].clientY); };
@@ -2823,6 +2829,37 @@ function bindSettings() {
       dialogAlert(err.message || '復元に失敗しました');
     }
   });
+  $('btn-check-update').addEventListener('click', checkForUpdate);
+}
+
+// サーバー上の最新のjs/version.jsを(キャッシュを通さず)取りに行き、今動いているバージョンと比べる
+async function checkForUpdate() {
+  const statusEl = document.getElementById('update-status');
+  const btn = document.getElementById('btn-check-update');
+  btn.disabled = true;
+  statusEl.textContent = '確認中...';
+  try {
+    const res = await fetch(`js/version.js?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error('取得できませんでした');
+    const text = await res.text();
+    const m = text.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+    const latest = m && m[1];
+    if (!latest) throw new Error('バージョンを読み取れませんでした');
+    if (latest === APP_VERSION) {
+      statusEl.textContent = `最新版です(バージョン ${APP_VERSION})`;
+    } else {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg) await reg.update().catch(() => {}); // 新しい内容を裏で取りに行かせる(反映はアプリを開き直したとき)
+      }
+      statusEl.textContent = `新しいバージョン(${latest})があります。アプリを完全に閉じて開き直してください。`;
+    }
+  } catch (err) {
+    console.error('バージョン確認に失敗:', err);
+    statusEl.textContent = '確認できませんでした。ネット接続を確認してください。';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ===== 曲情報の編集(タイトル・アーティスト・アルバム・ジャンル・年、と並び順用の読み) =====
@@ -2863,6 +2900,35 @@ function closeEditTrack() {
   editingArtwork = undefined;
   if (editingArtworkPreviewUrl) { URL.revokeObjectURL(editingArtworkPreviewUrl); editingArtworkPreviewUrl = null; }
   showView(viewBeforeEdit);
+}
+
+// ジャンルの選択肢: 「年代」タブで年を選んだときのチップと同じ順(J-Pop→Anime→洋楽→その他のジャンルをあいうえお順)
+function genrePickerOptions() {
+  const origins = ORIGIN_DEFS.map(d => originDisplayLabel(d));
+  const others = [...new Set(tracks.map(t => (t.genre || '').trim()).filter(g => g && !originKey({ genre: g })))]
+    .sort((a, b) => {
+      if (a === '不明') return 1;
+      if (b === '不明') return -1;
+      return a.localeCompare(b, 'ja');
+    });
+  return [...origins, ...others];
+}
+async function openGenrePicker() {
+  const options = genrePickerOptions();
+  if (options.length === 0) { dialogAlert('ライブラリにまだジャンルがありません。直接入力してください'); return; }
+  const idx = await showChoiceSheet('ジャンルを選ぶ', options);
+  if (idx < 0) return;
+  document.getElementById('edit-genre').value = options[idx];
+}
+
+// 年の選択肢: 2026年から下に下がっていく
+const YEAR_PICKER_MAX = 2026, YEAR_PICKER_MIN = 1950;
+async function openYearPicker() {
+  const options = [];
+  for (let y = YEAR_PICKER_MAX; y >= YEAR_PICKER_MIN; y--) options.push(String(y));
+  const idx = await showChoiceSheet('年を選ぶ', options);
+  if (idx < 0) return;
+  document.getElementById('edit-year').value = options[idx];
 }
 
 // 選んだ画像を、新しいジャケットとして差し替える(保存を押すまでは反映しない)

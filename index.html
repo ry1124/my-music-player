@@ -210,8 +210,18 @@
       <label class="form-row">タイトル<input id="edit-title" type="text"></label>
       <label class="form-row">アーティスト<input id="edit-artist" type="text"></label>
       <label class="form-row">アルバム<input id="edit-album" type="text"></label>
-      <label class="form-row">ジャンル<input id="edit-genre" type="text"></label>
-      <label class="form-row">年(西暦)<input id="edit-year" type="text" inputmode="numeric" maxlength="4"></label>
+      <label class="form-row">ジャンル
+        <div class="form-row-with-btn">
+          <input id="edit-genre" type="text">
+          <button id="btn-edit-genre-pick" type="button" class="form-row-pick-btn">一覧から▼</button>
+        </div>
+      </label>
+      <label class="form-row">年(西暦)
+        <div class="form-row-with-btn">
+          <input id="edit-year" type="text" inputmode="numeric" maxlength="4">
+          <button id="btn-edit-year-pick" type="button" class="form-row-pick-btn">一覧から▼</button>
+        </div>
+      </label>
       <div class="form-note">並び順用の読み(ふりがな)。あ〜わの並びは、この読みで決まります。空なら、表記のまま並びます。</div>
       <label class="form-row">タイトルの読み<input id="edit-title-sort" type="text"></label>
       <label class="form-row">アーティストの読み<input id="edit-artist-sort" type="text"></label>
@@ -254,13 +264,13 @@
           <option value="12">12秒</option>
         </select>
       </label>
-      <div class="form-note">「通常」以外は、曲を次々に切り替えるための特別な音声処理を使います。使うと、iPhoneの画面ロック中などに音が出ないことがあります。その場合は「通常」に戻してください。</div>
+      <div class="form-note">「通常」以外は、曲と曲をつなげて鳴らします。ただしiPhoneの画面ロック中は、OS側の制限で曲の自動切り替えだけができないことがあります(今の曲自体は途切れません)。ロック中の切り替えが気になる場合は、ロック画面の「次へ」を手動で押してください。</div>
 
       <div class="settings-section">音量</div>
       <label class="form-check">音量の自動そろえ<input id="set-soundcheck" type="checkbox"></label>
       <div class="settings-btn-row"><button id="btn-analyze-loudness" class="settings-action">全曲の音量を解析・調整する</button></div>
       <div id="loudness-status" class="form-note"></div>
-      <div class="form-note">曲ごとの音量の差を、聞いたときにそろえます(再生する曲は、自動で解析します)。曲のファイルは書き換えません。</div>
+      <div class="form-note">曲ごとの音量の差を、聞いたときにそろえます。オンにすると、再生した曲から順に裏側で音量を測り、調整した音声ファイルを作ります(画面は固まりません)。初めて再生する曲は、作り終わるまでの間は元の音量のまま流れ、次に再生するときから揃います。曲数が多いと、全曲そろうまで時間がかかることがあります。ここで作ったファイルも、元のファイルは書き換えません。</div>
 
       <div class="settings-section">ライブラリの整理</div>
       <div class="settings-btn-row"><button id="btn-merge-duplicates" class="settings-action">重複した曲を探してまとめる</button></div>
@@ -278,6 +288,8 @@
 
       <div class="settings-section">アプリ情報</div>
       <div id="settings-version" class="form-note"></div>
+      <div class="settings-btn-row"><button id="btn-check-update" class="settings-action">最新バージョンか確認する</button></div>
+      <div id="update-status" class="form-note"></div>
     </div>
   </section>
 
@@ -314,6 +326,7 @@
 </div>
 
 <div id="index-bar" class="index-bar hidden"></div>
+<div id="index-bubble" class="index-bubble hidden"></div>
 <div id="plain-scrollbar" class="plain-scrollbar hidden"><div id="plain-scrollbar-thumb" class="plain-scrollbar-thumb"></div></div>
 
 <audio id="audio-el" preload="metadata" playsinline></audio>
