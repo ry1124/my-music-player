@@ -93,6 +93,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   renderTrackList();
   renderPlaylistList();
   setTimeout(migrateThumbs, 1500); // 起動が落ち着いてから、足りないサムネイルを裏で作る
+  setTimeout(migrateSyncedLyrics, 1800); // 起動が落ち着いてから、時刻付き歌詞が文字だけになっている曲を裏で直す
   setTimeout(prerenderGroupLists, 2000); // 起動が落ち着いてから、年代/ジャンル/アーティストの一覧を先に作る
   setTimeout(() => { // 春夏秋冬の判定を、空き時間に少しずつ済ませておく(プレイリスト画面を初めて開くときに待たされないように)
     let i = 0;
@@ -467,7 +468,7 @@ async function fastDuration(file) {
 
 async function importOneFile(file, sourceKey, orderHint) {
   const [{ tags, artworkBlob }, duration] = await Promise.all([readTagsForImport(file), fastDuration(file)]);
-  const lyrics = extractLyrics(tags);
+  const rawLyrics = extractLyrics(tags);
   const fromName = parseFileName(file.name);
   const hasArtistTag = !!(tags.artist && tags.artist.trim());
   const track = {
@@ -485,10 +486,10 @@ async function importOneFile(file, sourceKey, orderHint) {
     fileBlob: file,
     mimeType: file.type || 'audio/mpeg',
     artworkBlob,
-    lyrics,
     sourceKey,
     addedAt: Date.now() + orderHint,
   };
+  applyLyricsText(track, rawLyrics); // ファイルに時刻付き(LRC形式)で歌詞が入っていれば、曲に合わせて動く形で取り込む
   const id = await DB.addTrack(track);
   track.id = id;
   return track; // 一覧用の小さな画像は、取り込みが終わってから、裏でまとめて作る(migrateThumbs)
@@ -649,6 +650,26 @@ function applyLyricsText(track, text) {
   track.lyrics = synced.length > 0
     ? synced.map(l => l.text).filter(Boolean).join('\n')
     : stripLrcTimestamps(text);
+}
+
+// 以前の取り込みでは、ファイルに時刻付き(LRC形式)で歌詞が入っていても、文字だけの歌詞として保存していた
+// (曲に合わせて動かなかった)。起動のたびに一度だけ、そのような曲が無いか裏で確認し、あれば直す
+let isMigratingSyncedLyrics = false;
+async function migrateSyncedLyrics() {
+  if (isMigratingSyncedLyrics) return;
+  isMigratingSyncedLyrics = true;
+  let fixed = 0;
+  for (const t of tracks) {
+    if (t.syncedLyrics || !t.lyrics) continue; // 既に時刻付き、または歌詞自体が無い曲はそのまま
+    const synced = parseLrc(t.lyrics);
+    if (synced.length === 0) continue; // 時刻タグが無い、本当にただの歌詞
+    t.syncedLyrics = synced;
+    t.lyrics = synced.map(l => l.text).filter(Boolean).join('\n');
+    await DB.updateTrack(t);
+    fixed++;
+  }
+  isMigratingSyncedLyrics = false;
+  if (fixed > 0 && currentTrack) { lastActiveLyricIdx = -1; updateLyricsPane(); }
 }
 
 function importLyricsForTrack(track) {
