@@ -1939,6 +1939,7 @@ const isPlaylistDetailActive = () => document.getElementById('view-playlist-deta
 async function openTrackActionSheet(track) {
   const options = [track.favorite ? 'お気に入りから外す' : 'お気に入りに追加', '次に再生', '最後に再生', 'プレイリストに追加', '曲情報を編集', '季節を設定(春夏秋冬)', '歌詞ファイルを読み込む', '歌詞をネットで再検索'];
   if (track.syncedLyrics && track.syncedLyrics.length > 0) options.push('曲の頭の無音からずれを調整'); // 時刻付きの歌詞がある曲だけ
+  else if (track.lyrics) options.push('歌詞のタイミングを自動推定'); // 文字だけの歌詞はあるが、時刻付きではない曲だけ
   if (isPlaylistDetailActive() && isEditableListId(currentPlaylistId)) options.push('このプレイリストから削除'); // プレイリストの画面を開いているときだけ(ライブラリなどでは出さない)
   options.push('ライブラリから削除');
   const idx = await showChoiceSheet(track.title, options);
@@ -1953,6 +1954,7 @@ async function openTrackActionSheet(track) {
   else if (label === '歌詞ファイルを読み込む') importLyricsForTrack(track);
   else if (label === '歌詞をネットで再検索') refetchLyrics(track);
   else if (label === '曲の頭の無音からずれを調整') estimateSilenceOffset(track);
+  else if (label === '歌詞のタイミングを自動推定') estimateLyricTiming(track);
   else if (label === 'このプレイリストから削除') removeTrackFromCurrentPlaylist(track.id);
   else if (label === 'ライブラリから削除') deleteTrackFromLibrary(track.id);
 }
@@ -1978,6 +1980,50 @@ async function estimateSilenceOffset(track) {
   await DB.updateTrack(track);
   if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
   dialogAlert('ずれを調整しました');
+}
+
+// 歌詞の行を、検出した「音が鳴っている区間」に順番に割り振る(区間ごとに、長さに応じた行数を比例配分する)。
+// 区間が1つも無ければ(検出失敗など)、曲全体に均等割りする
+function distributeLyricLinesOverSegments(lines, segments, totalDuration) {
+  if (segments.length === 0) {
+    const dur = totalDuration > 0 ? totalDuration : lines.length;
+    return lines.map((text, i) => ({ time: (dur * i) / lines.length, text }));
+  }
+  const totalActive = segments.reduce((s, seg) => s + (seg.end - seg.start), 0) || 1;
+  const result = [];
+  let li = 0;
+  segments.forEach((seg, si) => {
+    const segLen = seg.end - seg.start;
+    const isLast = si === segments.length - 1;
+    // 最後の区間には、割り切れずに余った行もすべて入れる
+    const linesForSeg = isLast ? (lines.length - li) : Math.max(1, Math.round((lines.length * segLen) / totalActive));
+    for (let k = 0; k < linesForSeg && li < lines.length; k++, li++) {
+      result.push({ time: seg.start + (segLen * k) / Math.max(1, linesForSeg), text: lines[li] });
+    }
+  });
+  while (li < lines.length) { result.push({ time: segments[segments.length - 1].end, text: lines[li] }); li++; } // 万一余ったら末尾にまとめる
+  return result;
+}
+
+// 時刻付きの歌詞が無い曲について、音量の変化(鳴っている/静かな区間)から、歌詞のタイミングを大まかに推定する
+async function estimateLyricTiming(track) {
+  const lines = (track.lyrics || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) { dialogAlert('この曲には歌詞がありません'); return; }
+  if (!dialogConfirm('歌詞のタイミングを、音量の変化から推定します。あくまで目安で、実際の歌とずれることがあります。よろしいですか?')) return;
+  let segments;
+  try {
+    segments = await AudioEngine.detectActiveSegments(track.fileBlob);
+  } catch (err) {
+    console.error('歌詞タイミングの推定に失敗:', track.title, err);
+    dialogAlert('この曲は解析できませんでした(対応していない形式の可能性があります)');
+    return;
+  }
+  track.syncedLyrics = distributeLyricLinesOverSegments(lines, segments, track.duration || 0);
+  track.lyrics = lines.join('\n');
+  track.lyricOffset = 0;
+  await DB.updateTrack(track);
+  if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
+  dialogAlert('歌詞のタイミングを推定しました(あくまで目安です。ずれる場合は「タップで合わせる」で調整してください)。');
 }
 
 // この1曲だけ、曲の長さに合う歌詞をネットで検索し直す(ずれている曲の直し用)

@@ -75,6 +75,49 @@ const AudioEngine = (() => {
     return 0;
   }
 
+  // ---- 音が鳴っている区間を大まかに検出する(歌詞のタイミング自動推定に使う) ----
+  // 時刻付きの歌詞が無い曲で、音量の変化からイントロ・間奏などの無音/静かな区間を飛ばして
+  // 歌詞を割り振るための目安。「歌っている」までは判定できず、あくまで「音が鳴っているか」だけを見る
+  async function detectActiveSegments(blob) {
+    const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!AC) throw new Error('この端末では検出できません');
+    const off = new AC(1, 1, 11025);
+    const buf = await off.decodeAudioData(await blob.arrayBuffer());
+    const data = buf.getChannelData(0);
+    const sr = buf.sampleRate;
+    const hop = Math.max(1, Math.round(sr * 0.1)); // 0.1秒ごとの区間で音量を測る
+    const n = Math.floor(data.length / hop);
+    if (n === 0) return [];
+    const db = new Array(n);
+    for (let i = 0; i < n; i++) {
+      let sum = 0;
+      const start = i * hop;
+      for (let j = start; j < start + hop; j++) sum += data[j] * data[j];
+      db[i] = 10 * Math.log10(sum / hop || 1e-12);
+    }
+    // 曲全体の音量の中央値から一定以上静かな区間を、無音/間奏とみなす
+    const sorted = db.slice().sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const threshold = median - 18;
+    const active = db.map(v => v > threshold);
+    // 短い切り替わり(0.3秒未満)は、ノイズとして前の状態に均す
+    const minRun = 3;
+    for (let i = 0; i < active.length;) {
+      let j = i;
+      while (j < active.length && active[j] === active[i]) j++;
+      if (j - i < minRun && i > 0) for (let k = i; k < j; k++) active[k] = active[i - 1];
+      i = j;
+    }
+    const segments = [];
+    let segStart = null;
+    for (let i = 0; i < active.length; i++) {
+      if (active[i] && segStart === null) segStart = i;
+      else if (!active[i] && segStart !== null) { segments.push({ start: (segStart * hop) / sr, end: (i * hop) / sr }); segStart = null; }
+    }
+    if (segStart !== null) segments.push({ start: (segStart * hop) / sr, end: (active.length * hop) / sr });
+    return segments;
+  }
+
   // ---- 音量をそろえた音声ファイルを作る(鳴らしながらではなく、事前に1回だけ波形を加工する) ----
   async function decode(blob) {
     const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
@@ -136,5 +179,5 @@ const AudioEngine = (() => {
     return encodeMp3(rendered);
   }
 
-  return { analyze, detectLeadSilence, renderNormalized };
+  return { analyze, detectLeadSilence, detectActiveSegments, renderNormalized };
 })();
