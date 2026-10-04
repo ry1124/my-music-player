@@ -713,11 +713,11 @@ function normalizeForMatch(s) {
     .replace(/[\s\-.,!?()\[\]・～~'’"“”:;/_]+/g, '');
 }
 
-// 曲名・アーティスト名が日本語を含むのに、歌詞に日本語が全く含まれない場合は
+// 日本語の歌詞を期待する(J-Pop/アニメのジャンルの曲は、曲名・アーティスト名がローマ字表記でも
+// 歌詞は日本語のはず)のに、歌詞に日本語が全く含まれない場合は、
 // 別言語の無関係な曲を誤って拾った可能性が高いため採用しない
-function lyricsLanguageMismatch(query, candidate) {
-  const queryIsJapanese = containsJapanese(query.artist) || containsJapanese(query.title);
-  if (!queryIsJapanese) return false;
+function lyricsLanguageMismatch(expectJapanese, candidate) {
+  if (!expectJapanese) return false;
   const text = candidate.syncedLyrics || candidate.plainLyrics || '';
   return !containsJapanese(text);
 }
@@ -731,16 +731,15 @@ function titleRoughlyMatches(queryTitle, candidateTitle) {
   return a === b || a.includes(b) || b.includes(a);
 }
 
-async function fetchLrcFromLrclib(artist, title, duration) {
+async function fetchLrcFromLrclib(artist, title, duration, expectJapanese) {
   const searchUrl = `${LRCLIB_BASE}/search?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`;
   const res = await fetch(searchUrl);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const query = { artist, title };
   const list = (await res.json()).filter(r =>
     !r.instrumental &&
     (r.syncedLyrics || r.plainLyrics) &&
     titleRoughlyMatches(title, r.trackName) &&
-    !lyricsLanguageMismatch(query, r));
+    !lyricsLanguageMismatch(expectJapanese, r));
   if (list.length === 0) return null;
   const diff = (r) => (duration > 0 && r.duration > 0 ? Math.abs(r.duration - duration) : Infinity);
   // 1) 長さが近く、時刻付きの歌詞がある版 → 2) 長さが近い、時刻なしの歌詞 → 3) それ以外(長さが分からない場合の最後の手段)
@@ -757,7 +756,9 @@ async function fetchLrcFromLrclib(artist, title, duration) {
 
 // 1曲分の歌詞を検索して、その曲に反映する。反映できたら 'synced' / 'plain'、見つからなければ null
 async function applyLyricsFromNet(track, onlyIfMatched = false) {
-  const data = await fetchLrcFromLrclib(track.artist, track.title, track.duration);
+  // J-Pop/アニメは、曲名・アーティスト名がローマ字表記でも歌詞は日本語のはず
+  const expectJapanese = ['jpop', 'anime'].includes(originKey(track)) || containsJapanese(track.artist) || containsJapanese(track.title);
+  const data = await fetchLrcFromLrclib(track.artist, track.title, track.duration, expectJapanese);
   if (!data || !(data.syncedLyrics || data.plainLyrics)) return null;
   if (onlyIfMatched && !(data.syncedLyrics && data.matchedByDuration)) return null; // 入れ直しモード: 長さの合う時刻付きの版が見つかったときだけ差し替える
   if (data.syncedLyrics) {
