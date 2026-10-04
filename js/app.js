@@ -1263,7 +1263,7 @@ function renderTrackList(filter = '') {
     .sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
 
   emptyHint.classList.toggle('hidden', tracks.length > 0);
-  fillTrackList(listEl, filtered, filtered.map(t => t.id));
+  fillTrackList(listEl, filtered, filtered.map(t => t.id), true);
 }
 
 // ===== 右端のインデックスバー(あ〜わ / A〜Z / #) =====
@@ -1314,9 +1314,13 @@ function jumpToSection(label) {
   const listTop = () => listEl.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop;
   // その頭文字の曲が無ければ、次に近い頭文字へ(Apple Musicと同じ)
   if (listEl._v) { // 曲一覧(仮想スクロール): 配列から位置を計算して、そこへスクロールする
-    const idx = listEl._v.list.findIndex(t => SECTION_INDEX.get(sectionOf(trackSortKey(t))) >= target);
+    const v = listEl._v;
+    const idx = v.list.findIndex(row => {
+      const sec = row.h ? (row.h === 'header' ? row.label : sectionOf(trackSortKey(row.track))) : sectionOf(trackSortKey(row));
+      return SECTION_INDEX.get(sec) >= target;
+    });
     if (idx < 0) return;
-    view.scrollTop = listTop() + headHeight(listEl) + idx * ROW_H - offset;
+    view.scrollTop = listTop() + headHeight(listEl) + v.offsets[idx] - offset;
     updateVirtualWindow(listEl, true);
     return;
   }
@@ -1347,7 +1351,6 @@ function hapticTick() {
 // iOS標準の一覧インデックスと同様: 文字1つ1つが独立した当たり判定を持ち、指が別の文字に移るたびに触覚+ジャンプする
 function setupIndexBar() {
   const bar = document.getElementById('index-bar');
-  const bubble = document.getElementById('index-bubble');
   const spans = INDEX_LABELS.map((l) => {
     const span = document.createElement('span');
     span.textContent = l;
@@ -1365,13 +1368,7 @@ function setupIndexBar() {
     const { label, i } = labelAt(clientY);
     bar.classList.add('touching');
     spans.forEach((sp, k) => sp.classList.toggle('current', k === i));
-    bubble.textContent = label;
-    bubble.classList.remove('hidden');
-    // 指の高さに合わせてバブルを動かす(画面中央固定だと、指とバブルの間で視線が行き来して使いにくいため)
-    const half = (bubble.offsetHeight || 76) / 2;
-    const top = Math.min(window.innerHeight - half - 8, Math.max(half + 8, clientY));
-    bubble.style.top = `${top}px`;
-    if (label !== lastLabel) { // 文字が変わったときだけ
+    if (label !== lastLabel) { // 文字が変わったときだけ(見出し行が一覧の中に実際にあるので、浮かせたバブルは出さない)
       lastLabel = label;
       hapticTick();
       jumpToSection(label);
@@ -1381,7 +1378,6 @@ function setupIndexBar() {
     lastLabel = null;
     bar.classList.remove('touching');
     spans.forEach(sp => sp.classList.remove('current'));
-    bubble.classList.add('hidden');
   };
 
   const onTouch = (e) => { e.preventDefault(); touchAt(e.touches[0].clientY); };
@@ -1500,12 +1496,50 @@ function trackItemHTML(track) {
 
 // 行を段階的に挿入する。最初の一部だけ先に表示して、残りは少しずつ追加する(数千曲でも画面が固まらない)
 // ===== 仮想スクロール: 画面に見えている範囲の前後の行だけを描画する(数千曲でも行数は約100に保つ) =====
-const ROW_H = 63;     // 曲の行の高さ(CSSの .track-item と一致させる)
-const PLAY_H = 64;    // 先頭の「再生/シャッフル」行の高さ(CSSの .play-row と一致させる)
-const V_BUFFER = 30;  // 見えている範囲の上下に、余分に描画しておく行数(速いスクロールで空白が出ないように)
+const ROW_H = 63;         // 曲の行の高さ(CSSの .track-item と一致させる)
+const PLAY_H = 64;        // 先頭の「再生/シャッフル」行の高さ(CSSの .play-row と一致させる)
+const HEADER_ROW_H = 32;  // 「あ」「か」…の見出し行の高さ(CSSの .section-header-row と一致させる)
+const V_BUFFER = 30;      // 見えている範囲の上下に、余分に描画しておく行数(速いスクロールで空白が出ないように)
 
 // 一覧の先頭にある「再生/シャッフル」行の高さ(曲を追加する画面のように、無い一覧は0)
 const headHeight = (listEl) => (listEl.querySelector(':scope > .play-row') ? PLAY_H : 0);
+
+// 曲の配列から、頭文字(あ・か・さ…)が変わるたびに見出し行を挟んだ配列を作る(本物のApple Musicと同じ見た目)。
+// 一覧はすでに sectionSort 済みであること
+function buildSectionedRows(list) {
+  const rows = [];
+  let last = null;
+  for (const track of list) {
+    const sec = sectionOf(trackSortKey(track));
+    if (sec !== last) { rows.push({ h: 'header', label: sec }); last = sec; }
+    rows.push({ h: 'track', track });
+  }
+  return rows;
+}
+const sectionedRowHeight = (row) => (row.h === 'header' ? HEADER_ROW_H : ROW_H);
+// 見出し行付きの一覧用のrowFnを作る(曲1件分のHTMLは、一覧ごとに違うrowFn(trackItemHTML / addRowHTMLなど)に任せる)
+function makeSectionedRowFn(trackRowFn) {
+  return (row) => (row.h === 'header' ? `<li class="section-header-row">${esc(row.label)}</li>` : trackRowFn(row.track));
+}
+
+// 各行の高さから、先頭からの累積オフセット(px)を作る。rows.length+1件(末尾は合計の高さ)
+function buildRowOffsets(rows, heightFn) {
+  const offsets = new Array(rows.length + 1);
+  offsets[0] = 0;
+  for (let i = 0; i < rows.length; i++) offsets[i + 1] = offsets[i] + heightFn(rows[i]);
+  return offsets;
+}
+// 累積オフセットの中から、「位置yの時点で何番目の行か」を二分探索で求める(行の高さが揃っていなくても使える)
+function indexAtOffset(offsets, y) {
+  if (y <= 0) return 0;
+  let lo = 0, hi = offsets.length - 2;
+  if (hi < 0) return 0;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (offsets[mid] <= y) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
 
 function updateVirtualWindow(listEl, force) {
   const v = listEl._v;
@@ -1513,29 +1547,33 @@ function updateVirtualWindow(listEl, force) {
   const view = listEl.closest('.view');
   if (!view) return;
   const listTop = listEl.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop;
-  const first = Math.floor((view.scrollTop - listTop - headHeight(listEl)) / ROW_H);
-  const visible = Math.ceil(view.clientHeight / ROW_H);
+  const relTop = Math.max(0, view.scrollTop - listTop - headHeight(listEl));
+  const relBottom = relTop + view.clientHeight;
   const n = v.list.length;
-  const needStart = Math.max(0, first);
-  const needEnd = Math.min(n, first + visible + 1);
+  const offsets = v.offsets;
+  const needStart = indexAtOffset(offsets, relTop);
+  const needEnd = Math.min(n, indexAtOffset(offsets, relBottom) + 1);
   // 必要な範囲が、描画済みの範囲(の内側に余裕を持たせた範囲)に収まっていれば、何もしない
-  if (!force && v.start >= 0 && v.start <= Math.max(0, needStart - V_BUFFER / 3) && v.end >= Math.min(n, needEnd + V_BUFFER / 3)) return;
-  const start = Math.max(0, first - V_BUFFER);
-  const end = Math.min(n, first + visible + V_BUFFER);
+  if (!force && v.start >= 0 && v.start <= Math.max(0, needStart - Math.ceil(V_BUFFER / 3)) && v.end >= Math.min(n, needEnd + Math.ceil(V_BUFFER / 3))) return;
+  const start = Math.max(0, needStart - V_BUFFER);
+  const end = Math.min(n, needEnd + V_BUFFER);
   while (v.top.nextSibling && v.top.nextSibling !== v.bottom) v.top.nextSibling.remove();
-  v.bottom.insertAdjacentHTML('beforebegin', v.list.slice(start, end).map(listEl._rowFn || trackItemHTML).join(''));
-  v.top.style.height = `${start * ROW_H}px`;
-  v.bottom.style.height = `${(n - end) * ROW_H}px`;
+  v.bottom.insertAdjacentHTML('beforebegin', v.list.slice(start, end).map(v.rowFn).join(''));
+  v.top.style.height = `${offsets[start]}px`;
+  v.bottom.style.height = `${offsets[n] - offsets[end]}px`;
   v.start = start;
   v.end = end;
 }
 
-function renderVirtualList(listEl, list) {
+// rowFn/heightFnを省略すると、曲が均等な高さで並ぶ今まで通りの一覧になる
+function renderVirtualList(listEl, list, rowFn, heightFn) {
+  const rf = rowFn || listEl._rowFn || trackItemHTML;
+  const hf = heightFn || (() => ROW_H);
   const top = document.createElement('li');
   const bottom = document.createElement('li');
   top.className = bottom.className = 'v-spacer';
   listEl.append(top, bottom);
-  listEl._v = { list, top, bottom, start: -1, end: -1 };
+  listEl._v = { list, top, bottom, start: -1, end: -1, rowFn: rf, offsets: buildRowOffsets(list, hf) };
   const view = listEl.closest('.view');
   if (view && !view._vScrollBound) {
     view._vScrollBound = true;
@@ -1553,12 +1591,15 @@ function renderVirtualList(listEl, list) {
 }
 
 // 曲一覧の共通の描画。先頭に再生/シャッフルを置き、クリックは一覧全体で1回だけ受ける(行ごとに登録しない)
-function fillTrackList(listEl, list, ids) {
+// sectioned=true のときだけ、頭文字ごとの見出し行(あ・か・さ…)を挟む(並び順があいうえお順の一覧だけで使う。
+// プレイリストのような手動の並び順では、見出しを挟むとバラバラに見えてしまうため使わない)
+function fillTrackList(listEl, list, ids, sectioned = false) {
   listEl.innerHTML = '';
   listEl._queueIds = ids;
   listEl._v = null;
   if (list.length > 0) listEl.appendChild(buildPlayRow(ids));
-  renderVirtualList(listEl, list);
+  if (sectioned) renderVirtualList(listEl, buildSectionedRows(list), makeSectionedRowFn(trackItemHTML), sectionedRowHeight);
+  else renderVirtualList(listEl, list);
   if (listEl._clickBound) return;
   listEl._clickBound = true;
   listEl.addEventListener('click', (e) => {
@@ -2276,9 +2317,8 @@ function renderAddSongsList(query) {
   const list = addSongsSorted.list.filter(t => !q || `${t.title} ${t.artist} ${t.album || ''}`.normalize('NFKC').toLowerCase().includes(q));
   const listEl = document.getElementById('add-songs-list');
   listEl.innerHTML = '';
-  listEl._rowFn = addRowHTML;
   listEl._v = null;
-  renderVirtualList(listEl, list);
+  renderVirtualList(listEl, buildSectionedRows(list), makeSectionedRowFn(addRowHTML), sectionedRowHeight);
 }
 
 function openAddSongs() {
