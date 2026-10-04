@@ -111,6 +111,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   bindUIEvents();
   bindAudioEvents();
   restorePlaybackState();
+  setTimeout(autoCheckUpdateSilently, 4000); // 起動が落ち着いてから、裏で新しいバージョンがないか確認する
 });
 
 function registerServiceWorker() {
@@ -2832,26 +2833,55 @@ function bindSettings() {
 }
 
 // サーバー上の最新のjs/version.jsを(キャッシュを通さず)取りに行き、今動いているバージョンと比べる
+async function fetchLatestVersion() {
+  const res = await fetch(`js/version.js?t=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('取得できませんでした');
+  const text = await res.text();
+  const m = text.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+  if (!m) throw new Error('バージョンを読み取れませんでした');
+  return m[1];
+}
+
+// service-worker.js自体は中身(バイト列)が変わらないリリースもあるため、
+// ブラウザの自動更新チェックだけでは新しさに気づけない場合がある。
+// そのため、新しいバージョンがあると分かったら unregister→再登録して、確実に新しい内容を取りに行かせる
+async function applyServiceWorkerUpdate() {
+  if (!('serviceWorker' in navigator)) return;
+  const reg = await navigator.serviceWorker.getRegistration();
+  if (reg) await reg.unregister().catch(() => {});
+  await navigator.serviceWorker.register('service-worker.js').catch(() => {});
+}
+
+let autoUpdateNoticeShown = false;
+let autoUpdateCheckInFlight = false;
+// アプリを開いた・前面に戻ったときに、裏で静かにバージョンを確認する(ユーザーが設定画面を開く必要がないようにするため)
+async function autoCheckUpdateSilently() {
+  if (autoUpdateCheckInFlight || autoUpdateNoticeShown) return;
+  autoUpdateCheckInFlight = true;
+  try {
+    const latest = await fetchLatestVersion();
+    if (latest !== APP_VERSION) {
+      autoUpdateNoticeShown = true;
+      await applyServiceWorkerUpdate();
+      showToast(`新しいバージョン(${latest})があります。アプリを閉じて開き直すと反映されます`);
+    }
+  } catch (err) { /* オフラインなどはここでは何もしない(設定画面のボタンでエラーを伝える) */ }
+  finally { autoUpdateCheckInFlight = false; }
+}
+
 async function checkForUpdate() {
   const statusEl = document.getElementById('update-status');
   const btn = document.getElementById('btn-check-update');
   btn.disabled = true;
   statusEl.textContent = '確認中...';
   try {
-    const res = await fetch(`js/version.js?t=${Date.now()}`, { cache: 'no-store' });
-    if (!res.ok) throw new Error('取得できませんでした');
-    const text = await res.text();
-    const m = text.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
-    const latest = m && m[1];
-    if (!latest) throw new Error('バージョンを読み取れませんでした');
+    const latest = await fetchLatestVersion();
     if (latest === APP_VERSION) {
       statusEl.textContent = `最新版です(バージョン ${APP_VERSION})`;
     } else {
-      if ('serviceWorker' in navigator) {
-        const reg = await navigator.serviceWorker.getRegistration();
-        if (reg) await reg.update().catch(() => {}); // 新しい内容を裏で取りに行かせる(反映はアプリを開き直したとき)
-      }
-      statusEl.textContent = `新しいバージョン(${latest})があります。アプリを完全に閉じて開き直してください。`;
+      autoUpdateNoticeShown = true;
+      await applyServiceWorkerUpdate();
+      statusEl.textContent = `新しいバージョン(${latest})に更新しました。アプリを完全に閉じて開き直してください。`;
     }
   } catch (err) {
     console.error('バージョン確認に失敗:', err);
@@ -3189,6 +3219,7 @@ async function openSleepTimerSheet() {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { savePlaybackState(true); return; }
   attemptResume(5, true); // 電話などで強制的に止められて、画面に戻ってきたときは、自動で再開する
+  autoCheckUpdateSilently(); // ホーム画面から復帰したときにも、新しいバージョンがないか裏で確認する
 });
 window.addEventListener('pagehide', () => savePlaybackState(true));
 window.addEventListener('focus', () => attemptResume(5, true)); // 電話の終了直後など、visibilitychangeが起きない場合の保険
