@@ -75,9 +75,10 @@ const AudioEngine = (() => {
     return 0;
   }
 
-  // ---- 音が鳴っている区間を大まかに検出する(歌詞のタイミング自動推定に使う) ----
-  // 時刻付きの歌詞が無い曲で、音量の変化からイントロ・間奏などの無音/静かな区間を飛ばして
-  // 歌詞を割り振るための目安。「歌っている」までは判定できず、あくまで「音が鳴っているか」だけを見る
+  // ---- 音が鳴っている区間(歌っぽい区間)を大まかに検出する(歌詞のタイミング自動推定に使う) ----
+  // 時刻付きの歌詞が無い曲で、歌詞を割り振るための目安。無音・間奏(曲の途中にあるものも含む)を
+  // できるだけ避けるため、「音量が十分か」だけでなく「強弱が歌っぽく揺れているか」も合わせて見る
+  // (前奏・間奏は、音量だけでは無音と区別できないことが多いため)
   async function detectActiveSegments(blob) {
     const AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     if (!AC) throw new Error('この端末では検出できません');
@@ -88,35 +89,73 @@ const AudioEngine = (() => {
     const hop = Math.max(1, Math.round(sr * 0.1)); // 0.1秒ごとの区間で音量を測る
     const n = Math.floor(data.length / hop);
     if (n === 0) return [];
-    const db = new Array(n);
+    const energy = new Array(n); // 区間ごとの、音量の2乗の平均(dBに変換する前の値。揺れ具合の計算にそのまま使う)
     const CHUNK = 500; // 曲が長くても、途中で画面(再生中の操作)に処理を返しながら進める
     for (let i = 0; i < n; i++) {
       let sum = 0;
       const start = i * hop;
       for (let j = start; j < start + hop; j++) sum += data[j] * data[j];
-      db[i] = 10 * Math.log10(sum / hop || 1e-12);
+      energy[i] = sum / hop;
       if (i % CHUNK === CHUNK - 1) await new Promise((r) => requestAnimationFrame(r));
     }
-    // 曲全体の音量の中央値から一定以上静かな区間を、無音/間奏とみなす
+    const db = energy.map(e => 10 * Math.log10(e || 1e-12));
+    // 曲全体の音量の中央値から一定以上静かな区間を、無音とみなす
     const sorted = db.slice().sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)];
-    const threshold = median - 18;
-    const active = db.map(v => v > threshold);
+    const loudEnough = db.map(v => v > median - 18);
     // 短い切り替わり(0.3秒未満)は、ノイズとして前の状態に均す
     const minRun = 3;
-    for (let i = 0; i < active.length;) {
+    for (let i = 0; i < loudEnough.length;) {
       let j = i;
-      while (j < active.length && active[j] === active[i]) j++;
-      if (j - i < minRun && i > 0) for (let k = i; k < j; k++) active[k] = active[i - 1];
+      while (j < loudEnough.length && loudEnough[j] === loudEnough[i]) j++;
+      if (j - i < minRun && i > 0) for (let k = i; k < j; k++) loudEnough[k] = loudEnough[i - 1];
       i = j;
     }
-    const segments = [];
+    // まず音量だけで、鳴っている区間を大まかに切り出す(無音(前奏の前・曲の終わりなど)を除く)
+    const volumeSegments = [];
     let segStart = null;
-    for (let i = 0; i < active.length; i++) {
-      if (active[i] && segStart === null) segStart = i;
-      else if (!active[i] && segStart !== null) { segments.push({ start: (segStart * hop) / sr, end: (i * hop) / sr }); segStart = null; }
+    for (let i = 0; i < loudEnough.length; i++) {
+      if (loudEnough[i] && segStart === null) segStart = i;
+      else if (!loudEnough[i] && segStart !== null) { volumeSegments.push([segStart, i]); segStart = null; }
     }
-    if (segStart !== null) segments.push({ start: (segStart * hop) / sr, end: (active.length * hop) / sr });
+    if (segStart !== null) volumeSegments.push([segStart, loudEnough.length]);
+
+    // 前後1秒ぶんの音量の「揺れ具合」(変動係数)を見る。一定の音量が続く前奏・間奏・パッド系の音は
+    // 揺れが小さく、歌は言葉の区切りで細かく揺れる(ただし、伸ばす音など一瞬だけ揺れが小さい箇所もあるので、
+    // 「揺れの小さい状態が2秒以上続いたとき」だけ間奏とみなして取り除く。歌の中の一瞬の揺れの小ささでは分けない)
+    const winHalf = 5;
+    const cv = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const lo = Math.max(0, i - winHalf), hi = Math.min(n, i + winHalf + 1);
+      const win = energy.slice(lo, hi);
+      const mean = win.reduce((a, b) => a + b, 0) / win.length;
+      if (mean <= 1e-9) { cv[i] = 0; continue; }
+      const variance = win.reduce((a, b) => a + (b - mean) ** 2, 0) / win.length;
+      cv[i] = Math.sqrt(variance) / mean;
+    }
+    const MIN_INTERLUDE_RUNS = 20; // 0.1秒刻みで20=約2秒。これ以上、揺れが小さい状態が続いたら間奏とみなす
+    const segments = [];
+    for (const [segStartIdx, segEndIdx] of volumeSegments) {
+      let curStart = segStartIdx;
+      let i = segStartIdx;
+      while (i < segEndIdx) {
+        if (cv[i] <= 0.5) {
+          let j = i;
+          while (j < segEndIdx && cv[j] <= 0.5) j++;
+          if (j - i >= MIN_INTERLUDE_RUNS) {
+            if (i > curStart) segments.push({ start: (curStart * hop) / sr, end: (i * hop) / sr });
+            curStart = j;
+          }
+          i = j;
+        } else {
+          i++;
+        }
+      }
+      if (segEndIdx > curStart) segments.push({ start: (curStart * hop) / sr, end: (segEndIdx * hop) / sr });
+    }
+    // 揺れの判定がうまく働かず、区間が全く残らなかった場合は、音量だけの区切りをそのまま使う(安全策。
+    // 歌詞が曲全体に均等割りされてしまう、最も避けたい状態を避ける)
+    if (segments.length === 0) return volumeSegments.map(([s, e]) => ({ start: (s * hop) / sr, end: (e * hop) / sr }));
     return segments;
   }
 
