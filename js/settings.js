@@ -6,6 +6,7 @@ const Settings = (() => {
     joint: 'off',        // 曲のつなぎ方: 'off'(通常) / 'gapless'(ギャップレス) / 'crossfade'(クロスフェード)
     crossfadeSec: 4,     // クロスフェードの長さ(秒)
     soundCheck: false,   // 音量の自動そろえ
+    playbackSpeed: 1,    // 再生速度
   };
   let values = { ...defaults };
   try { Object.assign(values, JSON.parse(localStorage.getItem(KEY)) || {}); } catch (e) { /* 保存できない環境では既定値のまま */ }

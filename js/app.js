@@ -47,6 +47,7 @@ const ICON_PATHS = {
   tabYears: '<path d="M17 12h-5v5h5v-5zM16 1v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-1V1h-2zm3 18H5V8h14v11z"/>',
   tabGenres: '<path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/>',
   tabArtists: '<path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>',
+  tabAlbums: '<path d="M12 11c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 16c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6z"/>',
   tabPlaylists: '<path d="M19 9H2v2h17V9zm0-4H2v2h17V5zM2 15h13v-2H2v2zm15-2v6l5-3-5-3z"/>',
   heart: '<path d="M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z"/>',
   heartFilled: '<path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>',
@@ -73,13 +74,10 @@ function setupIcons() {
   set('mini-playpause', 'play', 28);
   set('mini-next', 'next', 28);
   // タブバー・上部ボタンも単色アイコンにする(白い画面でカラー絵文字が浮かないように)
-  const tabIcons = { library: 'tabLibrary', years: 'tabYears', genres: 'tabGenres', artists: 'tabArtists', playlists: 'tabPlaylists' };
+  const tabIcons = { library: 'tabLibrary', years: 'tabYears', genres: 'tabGenres', artists: 'tabArtists', albums: 'tabAlbums', playlists: 'tabPlaylists' };
   Object.entries(tabIcons).forEach(([tab, key]) => {
     document.querySelector(`.tab-btn[data-tab="${tab}"] .tab-icon`).innerHTML = svgIcon(ICON_PATHS[key], 24);
   });
-  set('btn-rescan-tags', 'tag', 22);
-  set('btn-auto-lyrics', 'search', 22);
-  set('btn-import-lyrics', 'doc', 22);
   set('btn-add', 'add', 26);
   set('btn-settings', 'gear', 22);
   set('btn-new-playlist', 'add', 26);
@@ -111,6 +109,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   bindUIEvents();
   bindAudioEvents();
   restorePlaybackState();
+  applyPlaybackSpeed();
   setTimeout(autoCheckUpdateSilently, 4000); // 起動が落ち着いてから、裏で新しいバージョンがないか確認する
 });
 
@@ -199,6 +198,7 @@ function bindUIEvents() {
     years: 'view-years',
     genres: 'view-genres',
     artists: 'view-artists',
+    albums: 'view-albums',
     playlists: 'view-playlists',
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -209,6 +209,7 @@ function bindUIEvents() {
       if (tab === 'years') renderYearList();
       else if (tab === 'genres') renderGenreList();
       else if (tab === 'artists') renderArtistList(document.getElementById('artist-search-input').value.trim());
+      else if (tab === 'albums') renderAlbumList(document.getElementById('album-search-input').value.trim());
       showView(TAB_VIEW_MAP[tab] || 'view-library');
     });
   });
@@ -238,16 +239,12 @@ function bindUIEvents() {
     if (files.length > 0) handleFilesSelected(files);
   });
 
-  document.getElementById('btn-import-lyrics').addEventListener('click', () => {
-    document.getElementById('lyrics-file-input').click();
-  });
   document.getElementById('lyrics-file-input').addEventListener('change', (e) => {
     handleLyricsFilesSelected(e.target.files);
     e.target.value = '';
   });
 
-  document.getElementById('btn-auto-lyrics').addEventListener('click', autoFetchLyrics);
-  document.getElementById('btn-rescan-tags').addEventListener('click', rescanYearGenreTags);
+  document.getElementById('btn-library-more').addEventListener('click', openLibraryMoreSheet);
   document.getElementById('btn-select-mode').addEventListener('click', toggleSelectMode);
   document.getElementById('btn-select-all').addEventListener('click', toggleSelectAll);
   document.getElementById('btn-select-fav').addEventListener('click', bulkFavoriteSelected);
@@ -274,6 +271,13 @@ function bindUIEvents() {
     const value = e.target.value.trim();
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => renderTrackList(value), 200); // 入力が止まってから描画
+  });
+
+  let albumSearchTimer = null;
+  document.getElementById('album-search-input').addEventListener('input', (e) => {
+    const value = e.target.value.trim();
+    clearTimeout(albumSearchTimer);
+    albumSearchTimer = setTimeout(() => renderAlbumList(value), 200);
   });
 
   let artistSearchTimer = null;
@@ -374,6 +378,7 @@ function bindUIEvents() {
   document.getElementById('btn-next').addEventListener('click', playNext);
   document.getElementById('btn-shuffle').addEventListener('click', toggleShuffle);
   document.getElementById('btn-repeat').addEventListener('click', cycleRepeat);
+  document.getElementById('btn-speed').addEventListener('click', cycleSpeed);
   document.getElementById('btn-lyrics-toggle').addEventListener('click', toggleLyrics);
   document.getElementById('btn-np-fav').addEventListener('click', () => { if (currentTrack) toggleFavorite(currentTrack); });
   document.getElementById('btn-np-more').addEventListener('click', () => { if (currentTrack) openTrackActionSheet(currentTrack); });
@@ -907,6 +912,7 @@ function prerenderGroupLists() {
   renderYearList();
   renderGenreList();
   renderArtistList();
+  renderAlbumList();
 }
 
 // 「名前 + 曲数 + ジャケット」の行の一覧を、HTML文字列で一括生成する。クリックは一覧全体で1回だけ受ける
@@ -942,7 +948,7 @@ function renderGroupList(listElId, groupFn, sortFn, keyFn, cacheKey = '', filter
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label).push(t);
   });
-  const backView = { 'year-list': 'view-years', 'genre-list': 'view-genres', 'artist-list': 'view-artists' }[listElId];
+  const backView = { 'year-list': 'view-years', 'genre-list': 'view-genres', 'artist-list': 'view-artists', 'album-list': 'view-albums' }[listElId];
   const f = filter.trim().toLowerCase();
   // 名前(アーティスト名など)か、中の曲のタイトルのどちらかに一致すれば残す
   const keys = f ? [...groups.keys()].filter(label => label.toLowerCase().includes(f) || groups.get(label).some(t => t.title.toLowerCase().includes(f))) : [...groups.keys()];
@@ -991,6 +997,32 @@ function renderArtistList(filter = '') {
   if (ids.length > 0) listEl.insertBefore(buildPlayRow(ids), listEl.firstChild);
 }
 
+function renderAlbumList(filter = '') {
+  // アルバムの読み(TSOA)があれば、それで並べる。無ければ表記そのまま
+  const reading = new Map();
+  tracks.forEach((t) => {
+    const a = albumLabel(t);
+    if (t.albumSort && !reading.has(a)) reading.set(a, t.albumSort);
+  });
+  const keyOf = (a) => reading.get(a) || a;
+  renderGroupList('album-list', albumLabel, (a, b) => {
+    if (a === 'アルバム不明') return 1;
+    if (b === 'アルバム不明') return -1;
+    return sectionSort(keyOf(a), keyOf(b));
+  }, keyOf, '', filter);
+
+  // ライブラリと同じく、一覧の先頭に「再生 / シャッフル」を出す(今の絞り込みに一致する曲すべてが対象)
+  const listEl = document.getElementById('album-list');
+  const old = listEl.querySelector('.play-row');
+  if (old) old.remove();
+  const f = filter.trim().toLowerCase();
+  const ids = tracks
+    .filter(t => !f || albumLabel(t).toLowerCase().includes(f) || t.title.toLowerCase().includes(f))
+    .slice().sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)))
+    .map(t => t.id);
+  if (ids.length > 0) listEl.insertBefore(buildPlayRow(ids), listEl.firstChild);
+}
+
 function openGroupDetail(label, groupTracks, backView) {
   lastGroupListView = backView;
   document.getElementById('group-detail-title').textContent = label;
@@ -1005,6 +1037,11 @@ function openGroupDetail(label, groupTracks, backView) {
     filterEl.classList.add('hidden');
     regionEl.classList.add('hidden');
     renderGenreAlbumList(label, groupTracks);
+  } else if (backView === 'view-albums') {
+    filterEl.classList.add('hidden');
+    regionEl.classList.add('hidden');
+    // アルバム内は、曲順の情報を持っていないので、曲名のあいうえお順で並べる(ジャンルのアルバム一覧と同じ)
+    renderGroupDetailList(groupTracks.slice().sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b))));
   } else {
     filterEl.classList.add('hidden');
     regionEl.classList.add('hidden');
@@ -1268,7 +1305,7 @@ function renderTrackList(filter = '') {
 
 // ===== 右端のインデックスバー(あ〜わ / A〜Z / #) =====
 const INDEX_LABELS = [...'あかさたなはまやらわ', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', '#'];
-const INDEX_VIEWS = { 'view-library': 'track-list', 'view-artists': 'artist-list', 'view-add-songs': 'add-songs-list' }; // バーを出す画面 → 対象の一覧
+const INDEX_VIEWS = { 'view-library': 'track-list', 'view-artists': 'artist-list', 'view-albums': 'album-list', 'view-add-songs': 'add-songs-list' }; // バーを出す画面 → 対象の一覧
 const KANA_ROWS = {
   'あ': 'ぁあぃいぅうぇえぉおゔ', 'か': 'かきくけこゕゖ', 'さ': 'さしすせそ', 'た': 'たちつってとっ', 'な': 'なにぬねの',
   'は': 'はひふへほ', 'ま': 'まみむめも', 'や': 'ゃやゅゆょよ', 'ら': 'らりるれろ', 'わ': 'ゎわゐゑをん',
@@ -1611,6 +1648,16 @@ function fillTrackList(listEl, list, ids, sectioned = false) {
     if (e.target.closest('.track-menu-btn')) openTrackActionSheet(track);
     else playTrackById(track.id, listEl._queueIds);
   });
+}
+
+// ライブラリ画面の「⋯」: 普段あまり使わない操作をまとめる(トップバーのボタンが増えすぎないように)
+async function openLibraryMoreSheet() {
+  const options = ['年代・ジャンル情報を再スキャン', '歌詞をネットから自動検索', '歌詞ファイルを一括読み込み'];
+  const idx = await showChoiceSheet('その他の操作', options);
+  if (idx < 0) return;
+  if (idx === 0) rescanYearGenreTags();
+  else if (idx === 1) autoFetchLyrics();
+  else if (idx === 2) document.getElementById('lyrics-file-input').click();
 }
 
 function toggleSelectMode() {
@@ -2478,6 +2525,7 @@ function setSource(el, track) {
   const url = URL.createObjectURL(playbackBlob(track));
   audioUrls.set(el, url);
   el.src = url;
+  el.playbackRate = playbackSpeed;
   if (preloaded.el === el) preloaded = { el: null, trackId: null };
 }
 
@@ -3283,6 +3331,22 @@ function cycleRepeat() {
   repeatMode = repeatMode === 'off' ? 'all' : repeatMode === 'all' ? 'one' : 'off';
   setRepeatUI();
   savePlaybackState(true);
+}
+
+// ===== 再生速度 =====
+const SPEED_STEPS = [0.75, 1, 1.25, 1.5, 1.75, 2];
+let playbackSpeed = Settings.get('playbackSpeed') || 1;
+function applyPlaybackSpeed() {
+  audioA.playbackRate = playbackSpeed;
+  audioB.playbackRate = playbackSpeed;
+  document.getElementById('btn-speed').textContent = `${playbackSpeed}x`;
+  document.getElementById('btn-speed').classList.toggle('active', playbackSpeed !== 1);
+}
+function cycleSpeed() {
+  const i = SPEED_STEPS.indexOf(playbackSpeed);
+  playbackSpeed = SPEED_STEPS[(i + 1) % SPEED_STEPS.length];
+  applyPlaybackSpeed();
+  Settings.set('playbackSpeed', playbackSpeed);
 }
 
 function shuffleArray(arr, keepFirst) {

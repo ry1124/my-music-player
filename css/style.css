@@ -188,6 +188,7 @@ html, body {
 }
 .tab-btn {
   flex: 1;
+  min-width: 0;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -196,11 +197,12 @@ html, body {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  font-size: 10px;
+  font-size: 9px;
   padding-top: 4px;
 }
 .tab-btn.active { color: var(--accent); }
-.tab-icon { font-size: 20px; }
+.tab-btn span:last-child { white-space: nowrap; }
+.tab-icon { font-size: 19px; }
 
 /* ===== Now Playing ===== */
 #view-nowplaying {
@@ -278,6 +280,7 @@ html, body {
 .ctrl-btn.small { color: var(--text-dim); }
 .ctrl-btn.small.active { color: var(--accent); }
 .np-bottom { display: flex; align-items: center; justify-content: space-around; margin-top: 28px; padding: 0 24px; }
+.speed-btn { font-size: 14px; font-weight: 700; min-width: 34px; }
 
 /* スリープタイマー(再生画面の上部) */
 .np-sleep-timer { color: var(--text-dim); }
@@ -377,9 +380,7 @@ body.mini-open .view:not(#view-nowplaying) { bottom: calc(116px + var(--safe-bot
 .select-mode-btn { font-size: 14px; font-weight: 600; }
 body.select-mode-active .mini-player { display: none; }
 body.select-mode-active #view-library { bottom: calc(116px + var(--safe-bottom)); padding-bottom: 0; }
-#view-library.select-mode-active #btn-rescan-tags,
-#view-library.select-mode-active #btn-auto-lyrics,
-#view-library.select-mode-active #btn-import-lyrics,
+#view-library.select-mode-active #btn-library-more,
 #view-library.select-mode-active #btn-add { display: none; }
 
 .select-action-bar {
