@@ -373,6 +373,12 @@ function bindUIEvents() {
   document.getElementById('btn-collapse-nowplaying').addEventListener('click', () => {
     showView(viewBeforeNowPlaying || 'view-library'); // 再生画面を開く前にいた画面へ戻る
   });
+  document.getElementById('np-artist').addEventListener('click', () => {
+    if (!currentTrack) return;
+    const label = artistLabel(currentTrack);
+    const groupTracks = tracks.filter(t => artistLabel(t) === label);
+    openGroupDetail(label, groupTracks, 'view-artists'); // 内部でview-group-detailへ切り替わる(再生中の曲はそのまま鳴り続ける)
+  });
   document.getElementById('btn-playpause').addEventListener('click', togglePlayPause);
   document.getElementById('btn-prev').addEventListener('click', playPrev);
   document.getElementById('btn-next').addEventListener('click', playNext);
@@ -695,11 +701,46 @@ let isAutoFetchingLyrics = false;
 
 // 同じ曲でも、lrclibには長さ(イントロなど)の違う版が複数登録されている。曲の長さが近い版を選ばないと、歌詞のタイミングがずれる
 const LYRIC_DURATION_TOLERANCE = 3; // 秒。これ以内なら「同じ版」とみなす
+
+// 日本語(ひらがな/カタカナ/漢字)を含むかどうか
+function containsJapanese(s) {
+  return !!(s && /[぀-ヿ㐀-鿿]/.test(s));
+}
+
+// タイトル文字列の緩い正規化(空白・記号を除去して比較しやすくする)
+function normalizeForMatch(s) {
+  return (s || '').normalize('NFKC').toLowerCase()
+    .replace(/[\s\-.,!?()\[\]・～~'’"“”:;/_]+/g, '');
+}
+
+// 曲名・アーティスト名が日本語を含むのに、歌詞に日本語が全く含まれない場合は
+// 別言語の無関係な曲を誤って拾った可能性が高いため採用しない
+function lyricsLanguageMismatch(query, candidate) {
+  const queryIsJapanese = containsJapanese(query.artist) || containsJapanese(query.title);
+  if (!queryIsJapanese) return false;
+  const text = candidate.syncedLyrics || candidate.plainLyrics || '';
+  return !containsJapanese(text);
+}
+
+// lrclibの検索はあいまいマッチのため、曲名がある程度一致しているかも確認する
+// (一致が全く無いのに長さだけ近いという理由で無関係な曲を拾うのを防ぐ)
+function titleRoughlyMatches(queryTitle, candidateTitle) {
+  const a = normalizeForMatch(queryTitle);
+  const b = normalizeForMatch(candidateTitle);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
 async function fetchLrcFromLrclib(artist, title, duration) {
   const searchUrl = `${LRCLIB_BASE}/search?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`;
   const res = await fetch(searchUrl);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const list = (await res.json()).filter(r => !r.instrumental && (r.syncedLyrics || r.plainLyrics));
+  const query = { artist, title };
+  const list = (await res.json()).filter(r =>
+    !r.instrumental &&
+    (r.syncedLyrics || r.plainLyrics) &&
+    titleRoughlyMatches(title, r.trackName) &&
+    !lyricsLanguageMismatch(query, r));
   if (list.length === 0) return null;
   const diff = (r) => (duration > 0 && r.duration > 0 ? Math.abs(r.duration - duration) : Infinity);
   // 1) 長さが近く、時刻付きの歌詞がある版 → 2) 長さが近い、時刻なしの歌詞 → 3) それ以外(長さが分からない場合の最後の手段)
@@ -735,12 +776,31 @@ async function applyLyricsFromNet(track, onlyIfMatched = false) {
 
 async function autoFetchLyrics() {
   if (isAutoFetchingLyrics) { dialogAlert('すでに検索中です'); return; }
-  const idx = await showChoiceSheet('歌詞をネットから自動検索', ['歌詞が無い曲を検索', '時刻付き歌詞を、曲の長さに合う版で入れ直す(ずれ直し)']);
+  const idx = await showChoiceSheet('歌詞をネットから自動検索', [
+    '歌詞が無い曲を検索',
+    '時刻付き歌詞を、曲の長さに合う版で入れ直す(ずれ直し)',
+    '日本語の曲なのに歌詞が別の言語になっているものを修正',
+  ]);
   if (idx < 0) return;
   const resync = idx === 1;
-  const targets = resync ? tracks.filter(t => t.syncedLyrics && t.syncedLyrics.length > 0 && !t.lyricsDurationMatched) : tracks.filter(t => !t.lyrics);
-  if (targets.length === 0) { dialogAlert(resync ? '入れ直す対象の曲はありません' : '歌詞が無い曲はありません'); return; }
-  const message = resync
+  const fixMismatch = idx === 2;
+  let targets;
+  if (fixMismatch) {
+    targets = tracks.filter(t => t.lyrics &&
+      (containsJapanese(t.artist) || containsJapanese(t.title)) &&
+      !containsJapanese(t.lyrics));
+  } else if (resync) {
+    targets = tracks.filter(t => t.syncedLyrics && t.syncedLyrics.length > 0 && !t.lyricsDurationMatched);
+  } else {
+    targets = tracks.filter(t => !t.lyrics);
+  }
+  if (targets.length === 0) {
+    dialogAlert(fixMismatch ? '言語が合わなそうな歌詞の曲はありません' : resync ? '入れ直す対象の曲はありません' : '歌詞が無い曲はありません');
+    return;
+  }
+  const message = fixMismatch
+    ? `曲名/アーティストが日本語なのに歌詞に日本語が含まれない${targets.length}曲について、歌詞を取得し直します(見つからない場合は歌詞なしに戻ります)。始めますか?`
+    : resync
     ? `時刻付き歌詞のある${targets.length}曲について、曲の長さに合う版を探して入れ直します。長さの合う版が見つかった曲だけ差し替え、見つからない曲は今のままです(手動で読み込んだ歌詞ファイルも、合う版が見つかれば入れ替わります)。数分〜十数分かかります。アプリを開いたまま待つ必要があります。始めますか?`
     : `歌詞が無い${targets.length}曲をネットで自動検索します。曲数によっては数分〜十数分かかります。アプリを開いたまま待つ必要があります。始めますか?`;
   if (!dialogConfirm(message)) return;
@@ -760,9 +820,13 @@ async function autoFetchLyrics() {
       `歌詞をネット検索中... ${i + 1}/${targets.length}曲 (見つかった:${found}件) ` +
       (etaMin > 0 ? `残り約${etaMin}分 ` : '') + track.title;
     try {
+      if (fixMismatch) {
+        // 間違った言語の歌詞を一旦クリアしてから検索(古いデータが残らないようにする)
+        track.lyrics = ''; track.syncedLyrics = null;
+      }
       const result = await applyLyricsFromNet(track, resync);
       if (result) { found++; if (result === 'synced') syncedCount++; }
-      else notFound++;
+      else { notFound++; if (fixMismatch) await DB.updateTrack(track); }
     } catch (err) {
       console.error('歌詞検索失敗:', track.title, err);
       errorCount++;
