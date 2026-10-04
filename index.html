@@ -30,6 +30,7 @@
         <button id="btn-rescan-tags" class="icon-btn" title="年代・ジャンル情報を再スキャン">🏷</button>
         <button id="btn-auto-lyrics" class="icon-btn" title="歌詞をネットから自動検索">🔍</button>
         <button id="btn-import-lyrics" class="icon-btn" title="歌詞ファイルを一括読み込み">📝</button>
+        <button id="btn-select-mode" class="icon-btn select-mode-btn" title="複数選択">選択</button>
         <button id="btn-add" class="icon-btn" title="曲を追加">＋</button>
       </div>
     </header>
@@ -302,6 +303,17 @@
     </div>
     <button id="mini-playpause" class="icon-btn" title="再生/一時停止"></button>
     <button id="mini-next" class="icon-btn" title="次へ"></button>
+  </div>
+
+  <!-- ===== 複数選択時の操作バー(ライブラリ画面の「選択」時のみ) ===== -->
+  <div id="select-action-bar" class="select-action-bar hidden">
+    <button id="btn-select-all" class="select-bar-btn">全選択</button>
+    <span id="select-count" class="select-count">曲を選んでください</span>
+    <div class="select-bar-actions">
+      <button id="btn-select-fav" class="select-bar-btn" disabled>★ 追加</button>
+      <button id="btn-select-addpl" class="select-bar-btn" disabled>プレイリスト</button>
+      <button id="btn-select-delete" class="select-bar-btn danger" disabled>削除</button>
+    </div>
   </div>
 
   <!-- ===== タブバー ===== -->

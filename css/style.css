@@ -382,6 +382,39 @@ body.lyrics-expanded #view-nowplaying .np-lyrics { font-size: 23px; line-height:
 body.mini-open .view:not(#view-nowplaying) { bottom: calc(116px + var(--safe-bottom)); padding-bottom: 0; }
 .np-open .mini-player, .np-open .tabbar { display: none; }
 .np-open #view-nowplaying { padding-bottom: calc(24px + var(--safe-bottom)); }
+
+/* ===== ライブラリの複数選択モード ===== */
+.select-mode-btn { font-size: 14px; font-weight: 600; }
+body.select-mode-active .mini-player { display: none; }
+body.select-mode-active #view-library { bottom: calc(116px + var(--safe-bottom)); padding-bottom: 0; }
+#view-library.select-mode-active #btn-rescan-tags,
+#view-library.select-mode-active #btn-auto-lyrics,
+#view-library.select-mode-active #btn-import-lyrics,
+#view-library.select-mode-active #btn-add { display: none; }
+
+.select-action-bar {
+  position: absolute; left: 0; right: 0; bottom: calc(50px + var(--safe-bottom));
+  height: 58px; display: flex; align-items: center; gap: 10px;
+  padding: 0 16px; background: var(--mini-bg);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border-top: 0.5px solid var(--border); z-index: 16;
+}
+.select-bar-btn { background: none; border: none; color: var(--accent); font-size: 15px; font-weight: 600; padding: 8px 6px; white-space: nowrap; }
+.select-bar-btn:disabled { color: var(--text-dim); opacity: .5; }
+.select-bar-btn.danger { color: #ff3b30; }
+.select-count { flex: 1; text-align: center; font-size: 13px; color: var(--text-dim); }
+.select-bar-actions { display: flex; }
+
+.track-item.select-mode .track-menu-btn, .track-item.select-mode .fav-mark { display: none; }
+.select-check {
+  width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border);
+  flex-shrink: 0; position: relative; box-sizing: border-box;
+}
+.select-check.on { background: var(--accent); border-color: var(--accent); }
+.select-check.on::after {
+  content: ''; position: absolute; left: 6px; top: 2px; width: 6px; height: 11px;
+  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
 .view.has-index .search-bar, .view.has-index .play-row, .view.has-index .import-progress { margin-right: 26px; }
 .view.has-index .search-bar, .view.has-index .play-row { padding-right: 16px; }
 

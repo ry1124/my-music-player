@@ -123,6 +123,7 @@ function registerServiceWorker() {
 // ===== タブ切り替え =====
 let viewBeforeNowPlaying = 'view-library';
 function showView(id) {
+  if (selectMode && id !== 'view-library') exitSelectMode(); // 他の画面に移ったら、複数選択モードは自動で終わる
   const prev = document.querySelector('.view.active');
   if (id === 'view-nowplaying' && prev && prev.id !== 'view-nowplaying') viewBeforeNowPlaying = prev.id; // 閉じたときに戻る画面
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -247,6 +248,11 @@ function bindUIEvents() {
 
   document.getElementById('btn-auto-lyrics').addEventListener('click', autoFetchLyrics);
   document.getElementById('btn-rescan-tags').addEventListener('click', rescanYearGenreTags);
+  document.getElementById('btn-select-mode').addEventListener('click', toggleSelectMode);
+  document.getElementById('btn-select-all').addEventListener('click', toggleSelectAll);
+  document.getElementById('btn-select-fav').addEventListener('click', bulkFavoriteSelected);
+  document.getElementById('btn-select-addpl').addEventListener('click', bulkAddSelectedToPlaylist);
+  document.getElementById('btn-select-delete').addEventListener('click', bulkDeleteSelected);
   document.getElementById('btn-year-sort').addEventListener('click', () => {
     yearSortOrder = yearSortOrder === 'desc' ? 'asc' : 'desc';
     document.getElementById('btn-year-sort').textContent = yearSortOrder === 'desc' ? '降順(新→古)' : '昇順(古→新)';
@@ -1361,6 +1367,10 @@ function setupIndexBar() {
     spans.forEach((sp, k) => sp.classList.toggle('current', k === i));
     bubble.textContent = label;
     bubble.classList.remove('hidden');
+    // 指の高さに合わせてバブルを動かす(画面中央固定だと、指とバブルの間で視線が行き来して使いにくいため)
+    const half = (bubble.offsetHeight || 76) / 2;
+    const top = Math.min(window.innerHeight - half - 8, Math.max(half + 8, clientY));
+    bubble.style.top = `${top}px`;
     if (label !== lastLabel) { // 文字が変わったときだけ
       lastLabel = label;
       hapticTick();
@@ -1472,10 +1482,17 @@ function buildPlayRow(ids) {
 const HTML_ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => HTML_ESC[c]);
 
+// ===== ライブラリの複数選択(「選択」モード中だけ、チェックボックスを出して一括操作する) =====
+let selectMode = false;
+let selectedIds = new Set();
+
 // 1曲分の行。要素を1つずつ作るより、HTML文字列にして一括で挿入するほうがはるかに速い
 function trackItemHTML(track) {
   const playing = currentTrack && currentTrack.id === track.id;
-  return `<li class="track-item${playing ? ' playing' : ''}" data-track-id="${track.id}" data-section="${esc(sectionOf(trackSortKey(track)))}">` +
+  const sel = selectMode && selectedIds.has(track.id);
+  const checkbox = selectMode ? `<span class="select-check${sel ? ' on' : ''}"></span>` : '';
+  return `<li class="track-item${playing ? ' playing' : ''}${selectMode ? ' select-mode' : ''}${sel ? ' selected' : ''}" data-track-id="${track.id}" data-section="${esc(sectionOf(trackSortKey(track)))}">` +
+    checkbox +
     `<img class="track-artwork" loading="lazy" decoding="async" src="${getThumbUrl(track)}" alt="">` +
     `<div class="track-meta"><div class="track-title">${esc(track.title)}</div><div class="track-artist">${esc(track.artist)}</div></div>` +
     `${track.favorite ? '<span class="fav-mark">★</span>' : ''}<button class="track-menu-btn">⋯</button></li>`;
@@ -1549,9 +1566,103 @@ function fillTrackList(listEl, list, ids) {
     if (!li || !listEl.contains(li)) return;
     const track = tracks.find(t => String(t.id) === li.dataset.trackId);
     if (!track) return;
+    if (selectMode && listEl.id === 'track-list') { toggleTrackSelected(track.id, li); return; }
     if (e.target.closest('.track-menu-btn')) openTrackActionSheet(track);
     else playTrackById(track.id, listEl._queueIds);
   });
+}
+
+function toggleSelectMode() {
+  if (selectMode) { exitSelectMode(); return; }
+  selectMode = true;
+  document.getElementById('btn-select-mode').textContent = '完了';
+  document.getElementById('view-library').classList.add('select-mode-active');
+  document.body.classList.add('select-mode-active');
+  renderTrackList(document.getElementById('search-input').value.trim());
+  updateSelectBar();
+}
+
+function exitSelectMode() {
+  selectMode = false;
+  selectedIds.clear();
+  document.getElementById('btn-select-mode').textContent = '選択';
+  document.getElementById('view-library').classList.remove('select-mode-active');
+  document.body.classList.remove('select-mode-active');
+  renderTrackList(document.getElementById('search-input').value.trim());
+  updateSelectBar();
+}
+
+function toggleTrackSelected(id, li) {
+  if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
+  if (li) {
+    li.classList.toggle('selected', selectedIds.has(id));
+    const chk = li.querySelector('.select-check');
+    if (chk) chk.classList.toggle('on', selectedIds.has(id));
+  }
+  updateSelectBar();
+}
+
+function toggleSelectAll() {
+  const ids = document.getElementById('track-list')._queueIds || [];
+  if (selectedIds.size === ids.length) selectedIds.clear();
+  else selectedIds = new Set(ids);
+  renderTrackList(document.getElementById('search-input').value.trim());
+  updateSelectBar();
+}
+
+function updateSelectBar() {
+  const n = selectedIds.size;
+  document.getElementById('select-action-bar').classList.toggle('hidden', !selectMode);
+  document.getElementById('select-count').textContent = n > 0 ? `${n}曲を選択中` : '曲を選んでください';
+  const ids = document.getElementById('track-list')._queueIds || [];
+  document.getElementById('btn-select-all').textContent = n > 0 && n === ids.length ? '全解除' : '全選択';
+  ['btn-select-fav', 'btn-select-addpl', 'btn-select-delete'].forEach(id => { document.getElementById(id).disabled = n === 0; });
+}
+
+// お気に入りに追加(選んだ曲をまとめて)。既にお気に入りの曲はそのまま
+async function bulkFavoriteSelected() {
+  const ids = [...selectedIds];
+  for (const id of ids) {
+    const t = tracks.find(x => x.id === id);
+    if (t && !t.favorite) { t.favorite = true; await DB.updateTrack(t); }
+  }
+  renderPlaylistList();
+  exitSelectMode();
+  showToast(`${ids.length}曲をお気に入りに追加しました`);
+}
+
+// プレイリストに追加(選んだ曲をまとめて)
+async function bulkAddSelectedToPlaylist() {
+  const ids = [...selectedIds];
+  if (ids.length === 0) return;
+  if (playlists.length === 0) {
+    const name = dialogPrompt('プレイリストがありません。新規作成しますか?名前を入力してください');
+    if (!name || !name.trim()) return;
+    const playlist = { name: name.trim(), trackIds: ids.slice(), createdAt: Date.now() };
+    const plId = await DB.addPlaylist(playlist);
+    playlist.id = plId;
+    playlists.push(playlist);
+    renderPlaylistList();
+    exitSelectMode();
+    showToast(`${ids.length}曲を追加しました`);
+    return;
+  }
+  const idx = await showChoiceSheet('追加先のプレイリスト', playlists.map(p => p.name));
+  if (idx < 0) return;
+  const pl = playlists[idx];
+  let added = 0;
+  ids.forEach(id => { if (!pl.trackIds.includes(id)) { pl.trackIds.push(id); added++; } });
+  await DB.updatePlaylist(pl);
+  renderPlaylistList();
+  exitSelectMode();
+  showToast(`${added}曲を追加しました`);
+}
+
+// ライブラリから削除(選んだ曲をまとめて)
+async function bulkDeleteSelected() {
+  const ids = [...selectedIds];
+  const done = await deleteTracksFromLibrary(ids);
+  if (done) { exitSelectMode(); showToast(`${ids.length}曲を削除しました`); }
 }
 
 // ===== alert/confirm/prompt の置き換え =====
@@ -1710,19 +1821,30 @@ function removeFromQueues(id) {
 }
 
 async function deleteTrackFromLibrary(trackId) {
-  if (!dialogConfirm('この曲をライブラリから削除しますか?')) return;
-  await DB.deleteTrack(trackId);
-  await DB.deleteThumb(trackId);
-  removeFromQueues(trackId);
-  thumbMap.delete(trackId);
-  thumbUrlCache.delete(trackId);
-  tracks = tracks.filter(t => t.id !== trackId);
-  playlists.forEach(p => { p.trackIds = p.trackIds.filter(id => id !== trackId); });
+  return deleteTracksFromLibrary([trackId]);
+}
+
+// 複数曲まとめてライブラリから削除(確認は1回だけ)。実際に削除したら true を返す
+async function deleteTracksFromLibrary(trackIds) {
+  if (!trackIds || trackIds.length === 0) return false;
+  const msg = trackIds.length === 1 ? 'この曲をライブラリから削除しますか?' : `選んだ${trackIds.length}曲をライブラリから削除しますか?`;
+  if (!dialogConfirm(msg)) return false;
+  const idSet = new Set(trackIds);
+  for (const trackId of trackIds) {
+    await DB.deleteTrack(trackId);
+    await DB.deleteThumb(trackId);
+    removeFromQueues(trackId);
+    thumbMap.delete(trackId);
+    thumbUrlCache.delete(trackId);
+  }
+  tracks = tracks.filter(t => !idSet.has(t.id));
+  playlists.forEach(p => { p.trackIds = p.trackIds.filter(id => !idSet.has(id)); });
   for (const p of playlists) await DB.updatePlaylist(p);
   markLibraryChanged();
   renderTrackList(document.getElementById('search-input').value.trim());
   renderPlaylistList();
   if (isPlaylistDetailActive()) openPlaylistDetail(currentPlaylistId, playlistDetailBackView); // 開いているプレイリストの中から削除したときも、閉じ直さず即座に消す
+  return true;
 }
 
 // ===== 自動の一覧(最近追加した曲 / 最近再生した曲) =====
