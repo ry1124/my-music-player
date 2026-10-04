@@ -516,10 +516,10 @@ async function handleFilesSelected(fileList) {
   };
 
   // 区切りごとに待たず、空いた分から次の曲を始める(遅い曲が1つあっても、全体が止まらない)
-  // ファイルが小さいと読み込みがマイクロタスクだけで終わり、画面の描画・タップへの反応が
-  // 後回しにされて「固まったように」見えることがあるため、何曲かに1回、画面に処理を返す
+  // 曲によっては、タグ・ジャケット画像の読み取りやデータベースへの書き込みに意外と時間がかかり、
+  // 画面の描画・タップへの反応が後回しにされて「固まったように」見えることがあるため、
+  // 1曲処理するごとに、描画のタイミングで必ず画面へ処理を返す
   let nextIndex = 0;
-  let sinceYield = 0;
   const worker = async () => {
     while (nextIndex < targets.length) {
       const i = nextIndex++;
@@ -533,8 +533,7 @@ async function handleFilesSelected(fileList) {
         failures.push(`${file.name}(${err && err.message ? err.message : err})`);
       } finally {
         updateProgress(file.name);
-        sinceYield++;
-        if (sinceYield >= 5) { sinceYield = 0; await new Promise(r => setTimeout(r, 0)); }
+        await new Promise(r => requestAnimationFrame(r));
       }
     }
   };
