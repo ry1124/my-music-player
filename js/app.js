@@ -2826,6 +2826,7 @@ function renderNormalizedForTrack(track) {
       // ほぼ差が無い曲は、わざわざ作り直さず元のファイルのまま鳴らす
       track.normBlob = Math.abs(gainDb) >= 0.5 ? await AudioEngine.renderNormalized(track.fileBlob, gainDb) : null;
       track.normGainDb = gainDb;
+      await DB.updateTrackAudio(track.id, { fileBlob: track.fileBlob, normBlob: track.normBlob });
       await DB.updateTrack(track);
     } catch (err) {
       console.error('音量を調整したファイルの作成に失敗:', track.title, err);
@@ -3212,6 +3213,7 @@ async function applyServiceWorkerUpdate() {
 
 let autoUpdateNoticeShown = false;
 let autoUpdateCheckInFlight = false;
+let pendingAutoReload = false; // 曲の再生中に新バージョンを検知したとき: 再生が止まったら更新する
 // アプリを開いた・前面に戻ったときに、裏で静かにバージョンを確認する(ユーザーが設定画面を開く必要がないようにするため)
 async function autoCheckUpdateSilently() {
   if (autoUpdateCheckInFlight || autoUpdateNoticeShown) return;
@@ -3221,7 +3223,13 @@ async function autoCheckUpdateSilently() {
     if (latest !== APP_VERSION) {
       autoUpdateNoticeShown = true;
       await applyServiceWorkerUpdate();
-      showToast(`新しいバージョン(${latest})があります。アプリを閉じて開き直すと反映されます`);
+      if (currentTrack && !audioEl.paused) {
+        // 再生中にいきなり画面を切り替えないよう、曲の再生が止まったタイミングで更新する(onAudio('pause', ...)内)
+        pendingAutoReload = true;
+        showToast(`新しいバージョン(${latest})があります。再生が終わり次第、更新します`);
+      } else {
+        location.reload();
+      }
     }
   } catch (err) { /* オフラインなどはここでは何もしない(設定画面のボタンでエラーを伝える) */ }
   finally { autoUpdateCheckInFlight = false; }
@@ -3239,7 +3247,13 @@ async function checkForUpdate() {
     } else {
       autoUpdateNoticeShown = true;
       await applyServiceWorkerUpdate();
-      statusEl.textContent = `新しいバージョン(${latest})に更新しました。アプリを完全に閉じて開き直してください。`;
+      if (currentTrack && !audioEl.paused) {
+        pendingAutoReload = true;
+        statusEl.textContent = `新しいバージョン(${latest})に更新しました。再生が終わり次第、画面が更新されます。`;
+      } else {
+        statusEl.textContent = `新しいバージョン(${latest})に更新しました。まもなく画面が更新されます。`;
+        setTimeout(() => location.reload(), 600); // メッセージが一瞬見えるよう、少し待ってから更新する
+      }
     }
   } catch (err) {
     console.error('バージョン確認に失敗:', err);
@@ -3613,7 +3627,11 @@ function bindAudioEvents() {
     lyricRaf = audioEl.paused ? null : requestAnimationFrame(lyricLoop);
   };
   onAudio('play', () => { setPlayPauseIcon(true); if (lyricRaf === null) lyricRaf = requestAnimationFrame(lyricLoop); });
-  onAudio('pause', () => { clearJointStartTimer(); savePlaybackState(true); setPlayPauseIcon(false); if (lyricRaf !== null) { cancelAnimationFrame(lyricRaf); lyricRaf = null; } });
+  onAudio('pause', () => {
+    clearJointStartTimer(); savePlaybackState(true); setPlayPauseIcon(false);
+    if (lyricRaf !== null) { cancelAnimationFrame(lyricRaf); lyricRaf = null; }
+    if (pendingAutoReload) location.reload(); // 新バージョンの検知を再生中に保留していた場合、止まったタイミングで更新する
+  });
   onAudio('seeked', () => { clearJointStartTimer(); highlightCurrentLyricLine(); });
   onAudio('ended', () => {
     if (sleepTimerEndOfTrack) {
