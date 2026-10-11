@@ -7,6 +7,7 @@ const Settings = (() => {
     crossfadeSec: 4,     // クロスフェードの長さ(秒)
     soundCheck: false,   // 音量の自動そろえ
     playbackSpeed: 1,    // 再生速度
+    artistTrackSort: 'added', // アーティスト内の曲の並び順: 'added'(追加順) / 'alpha'(あいうえお順) / 'year'(年代順)
   };
   let values = { ...defaults };
   try { Object.assign(values, JSON.parse(localStorage.getItem(KEY)) || {}); } catch (e) { /* 保存できない環境では既定値のまま */ }

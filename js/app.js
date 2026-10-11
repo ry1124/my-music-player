@@ -14,6 +14,8 @@ let sleepTimerId = null;        // 時間指定のsetTimeoutのID
 let sleepTimerEndAt = null;     // 止まる予定の時刻(Date.now()と比べる用)
 let sleepTimerEndOfTrack = false; // true: 今の曲が終わったところで止める
 let lastGroupListView = 'view-years'; // 年代/ジャンル詳細画面から「戻る」時にどちらに戻るか
+let lastArtistGroupTracks = null; // アーティスト詳細を開いた時点の曲一覧(並び順を変えたときの再描画用)
+let artistTrackSort = Settings.get('artistTrackSort') || 'added'; // 'added' / 'alpha' / 'year'
 const artworkUrlCache = new Map(); // trackId -> objectURL(元のジャケット画像)
 const thumbMap = new Map();        // trackId -> 一覧用の小さなジャケット画像(Blob)
 const thumbUrlCache = new Map();   // trackId -> objectURL(サムネイル)
@@ -256,6 +258,7 @@ function bindUIEvents() {
     document.getElementById('btn-year-sort').textContent = yearSortOrder === 'desc' ? '降順(新→古)' : '昇順(古→新)';
     renderYearList();
   });
+  document.getElementById('btn-group-sort').addEventListener('click', openArtistTrackSortSheet);
   document.getElementById('btn-back-group').addEventListener('click', () => {
     // ジャンルの曲一覧から戻るときは、まずアルバム一覧へ戻る
     if (lastGroupListView === 'view-genres' && genreCtx && genreCtx.album !== null) {
@@ -1136,11 +1139,40 @@ function openGroupDetail(label, groupTracks, backView) {
     // アルバム内は、曲順の情報を持っていないので、曲名のあいうえお順で並べる(ジャンルのアルバム一覧と同じ)
     renderGroupDetailList(groupTracks.slice().sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b))));
   } else {
+    // アーティスト詳細: 並び順(追加順/あいうえお順/年代順)を選べる
     filterEl.classList.add('hidden');
     regionEl.classList.add('hidden');
-    renderGroupDetailList(groupTracks);
+    lastArtistGroupTracks = groupTracks;
+    renderGroupDetailList(sortArtistTracks(groupTracks));
   }
+  document.getElementById('btn-group-sort').classList.toggle('hidden', backView !== 'view-artists');
   showView('view-group-detail');
+}
+
+// アーティスト詳細内の曲の並び順。'added'=追加順(既定・そのまま) / 'alpha'=曲名のあいうえお順 / 'year'=年代順(古い→新しい)
+function sortArtistTracks(list) {
+  if (artistTrackSort === 'alpha') {
+    return list.slice().sort((a, b) => sectionSort(trackSortKey(a), trackSortKey(b)));
+  }
+  if (artistTrackSort === 'year') {
+    return list.slice().sort((a, b) => {
+      const ya = parseInt(a.year, 10); const yb = parseInt(b.year, 10);
+      const va = isNaN(ya) ? Infinity : ya; const vb = isNaN(yb) ? Infinity : yb;
+      if (va !== vb) return va - vb;
+      return sectionSort(trackSortKey(a), trackSortKey(b));
+    });
+  }
+  return list.slice().sort((a, b) => (a.addedAt || 0) - (b.addedAt || 0));
+}
+
+async function openArtistTrackSortSheet() {
+  const options = ['追加順', 'あいうえお順', '年代順(古い→新しい)'];
+  const current = { added: 0, alpha: 1, year: 2 }[artistTrackSort];
+  const idx = await showChoiceSheet(`並び順(現在: ${options[current]})`, options);
+  if (idx < 0) return;
+  artistTrackSort = ['added', 'alpha', 'year'][idx];
+  Settings.set('artistTrackSort', artistTrackSort);
+  if (lastArtistGroupTracks) renderGroupDetailList(sortArtistTracks(lastArtistGroupTracks));
 }
 
 // 詳細画面には、アルバム一覧と曲一覧の2つの領域があり、どちらか一方だけを表示する
