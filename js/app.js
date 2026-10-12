@@ -252,6 +252,7 @@ function bindUIEvents() {
   document.getElementById('btn-select-all').addEventListener('click', toggleSelectAll);
   document.getElementById('btn-select-fav').addEventListener('click', bulkFavoriteSelected);
   document.getElementById('btn-select-addpl').addEventListener('click', bulkAddSelectedToPlaylist);
+  document.getElementById('btn-select-export').addEventListener('click', bulkExportSelected);
   document.getElementById('btn-select-delete').addEventListener('click', bulkDeleteSelected);
   document.getElementById('btn-year-sort').addEventListener('click', () => {
     yearSortOrder = yearSortOrder === 'desc' ? 'asc' : 'desc';
@@ -1835,7 +1836,7 @@ function updateSelectBar() {
   document.getElementById('select-count').textContent = n > 0 ? `${n}曲を選択中` : '曲を選んでください';
   const ids = document.getElementById('track-list')._queueIds || [];
   document.getElementById('btn-select-all').textContent = n > 0 && n === ids.length ? '全解除' : '全選択';
-  ['btn-select-fav', 'btn-select-addpl', 'btn-select-delete'].forEach(id => { document.getElementById(id).disabled = n === 0; });
+  ['btn-select-fav', 'btn-select-addpl', 'btn-select-export', 'btn-select-delete'].forEach(id => { document.getElementById(id).disabled = n === 0; });
 }
 
 // お気に入りに追加(選んだ曲をまとめて)。既にお気に入りの曲はそのまま
@@ -1875,6 +1876,63 @@ async function bulkAddSelectedToPlaylist() {
   renderPlaylistList();
   exitSelectMode();
   showToast(`${added}曲を追加しました`);
+}
+
+// 書き出し(選んだ曲をまとめて、音声ファイルそのものを共有シート経由で渡す。他の端末では「＋曲を追加」で取り込める)
+const EXPORT_EXT_BY_MIME = {
+  'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'm4a',
+  'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/flac': 'flac', 'audio/x-flac': 'flac', 'audio/ogg': 'ogg',
+};
+function exportFileNameFor(track) {
+  if (track.fileBlob instanceof File && track.fileBlob.name) return track.fileBlob.name;
+  const ext = EXPORT_EXT_BY_MIME[track.mimeType] || 'mp3';
+  const safe = (s) => String(s || '').replace(/[\\/:*?"<>|]/g, '_');
+  return `${safe(track.artist)} - ${safe(track.title)}.${ext}`;
+}
+function toExportFile(track) {
+  const blob = track.fileBlob;
+  if (blob instanceof File && blob.name) return blob;
+  return new File([blob], exportFileNameFor(track), { type: (blob && blob.type) || track.mimeType || 'audio/mpeg' });
+}
+async function bulkExportSelected() {
+  const ids = [...selectedIds];
+  if (ids.length === 0) return;
+  if (ids.length > 30 && !dialogConfirm(`${ids.length}曲を書き出します。曲数が多いと共有に失敗しやすくなります。続けますか?`)) return;
+  const selected = ids.map(id => tracks.find(t => t.id === id)).filter(Boolean);
+  showToast('書き出す準備をしています…', 15000);
+  let files;
+  try {
+    files = selected.map(toExportFile);
+  } catch (err) {
+    hideToast();
+    dialogAlert(`書き出す準備に失敗しました: ${err && err.message ? err.message : err}`);
+    return;
+  }
+  hideToast();
+  try {
+    if (navigator.canShare && navigator.canShare({ files })) {
+      await navigator.share({ files, title: `${files.length}曲` });
+      exitSelectMode();
+      return;
+    }
+  } catch (err) {
+    if (err && err.name === 'AbortError') return; // 共有シートを閉じただけ
+    console.error('共有に失敗。ダウンロードに切り替えます:', err);
+  }
+  // 共有シートが使えない環境では、1曲ずつダウンロードする
+  for (const f of files) {
+    const url = URL.createObjectURL(f);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = f.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    await new Promise(r => setTimeout(r, 300));
+  }
+  exitSelectMode();
+  showToast(`${files.length}曲を書き出しました`);
 }
 
 // ライブラリから削除(選んだ曲をまとめて)
