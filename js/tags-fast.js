@@ -7,6 +7,9 @@ const FastTags = (() => {
   const syncsafe = (b, o) => ((b[o] & 0x7f) << 21) | ((b[o + 1] & 0x7f) << 14) | ((b[o + 2] & 0x7f) << 7) | (b[o + 3] & 0x7f);
   const be32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
   const isId3 = (h) => h[0] === 0x49 && h[1] === 0x44 && h[2] === 0x33;
+  // WAV: "RIFF"(4) + ファイル全体のサイズ(4) + "WAVE"(4) で始まる
+  const isRiffWave = (h) => h[0] === 0x52 && h[1] === 0x49 && h[2] === 0x46 && h[3] === 0x46
+    && h[8] === 0x57 && h[9] === 0x41 && h[10] === 0x56 && h[11] === 0x45;
 
   async function readHead(file) {
     return new Uint8Array(await file.slice(0, 10).arrayBuffer());
@@ -33,16 +36,14 @@ const FastTags = (() => {
     return s.split('\u0000')[0]; // 末尾のNUL・複数値の区切り以降を切り捨てる
   }
 
-  // ID3v2ヘッダ+タグ本体を読み込み、フレームを1件ずつ渡す。読めない形式(未同期化タグなど)なら null を返す
-  async function walkFrames(file, onFrame) {
-    const head = await readHead(file);
-    if (!isId3(head)) return null;
-    const ver = head[3];
-    const flags = head[5];
+  // ID3v2タグ(ヘッダ10バイト+本体)を直接渡して、フレームを1件ずつ渡す。読めない形式(未同期化タグなど)なら null を返す。
+  // ファイル先頭のID3v2(walkFrames経由)と、WAVに埋め込まれたid3チャンクの中身(readAllWav経由)の、どちらからも使う
+  function parseId3Buffer(buf, onFrame) {
+    if (!isId3(buf)) return null;
+    const ver = buf[3];
+    const flags = buf[5];
     if (ver < 2 || ver > 4 || (flags & 0x80)) return null; // 未同期化タグは、複雑なので従来の方法に任せる
-    const total = 10 + syncsafe(head, 6);
-    if (total > file.size) return null;
-    const buf = new Uint8Array(await file.slice(0, total).arrayBuffer());
+    const total = Math.min(10 + syncsafe(buf, 6), buf.length);
     let pos = 10;
     if (flags & 0x40) pos += ver === 4 ? syncsafe(buf, pos) : 4 + be32(buf, pos); // 拡張ヘッダ
     const idLen = ver === 2 ? 3 : 4;
@@ -71,6 +72,16 @@ const FastTags = (() => {
       pos = end;
     }
     return buf;
+  }
+
+  // ファイル先頭のID3v2ヘッダ+タグ本体を読み込む版(MP3など)。読めない形式なら null を返す
+  async function walkFrames(file, onFrame) {
+    const head = await readHead(file);
+    if (!isId3(head)) return null;
+    const total = 10 + syncsafe(head, 6);
+    if (total > file.size) return null;
+    const buf = new Uint8Array(await file.slice(0, total).arrayBuffer());
+    return parseId3Buffer(buf, onFrame);
   }
 
   // フレーム単位の非同期化(ID3v2.4)の解除: 0xFFの直後にある0x00を取り除く
@@ -124,38 +135,101 @@ const FastTags = (() => {
     return decodeText(buf, Math.min(p, end), end, enc);
   }
 
-  // 曲名・アーティスト等・並び替え用の読み・歌詞・ジャケット画像を、まとめて1回の読み込みで取り出す
-  // 戻り値の tags は、今までの jsmediatags 版と同じ形(title/artist/album/genre/year/TSOT/TSOP/TSOA/lyrics が、いずれも文字列)で返す
-  async function readAll(file) {
-    const TEXT_MAP = { // ID3v2.2(3文字) / v2.3・v2.4(4文字)の両方に対応
-      TT2: 'title', TIT2: 'title',
-      TP1: 'artist', TPE1: 'artist',
-      TAL: 'album', TALB: 'album',
-      TCO: 'genre', TCON: 'genre',
-      TYE: 'year', TYER: 'year', TDRC: 'year', TDOR: 'year', TDRL: 'year', TORY: 'year',
-      TST: 'TSOT', TSOT: 'TSOT',
-      TSP: 'TSOP', TSOP: 'TSOP',
-      TSA: 'TSOA', TSOA: 'TSOA',
-    };
+  const ID3_TEXT_MAP = { // ID3v2.2(3文字) / v2.3・v2.4(4文字)の両方に対応
+    TT2: 'title', TIT2: 'title',
+    TP1: 'artist', TPE1: 'artist',
+    TAL: 'album', TALB: 'album',
+    TCO: 'genre', TCON: 'genre',
+    TYE: 'year', TYER: 'year', TDRC: 'year', TDOR: 'year', TDRL: 'year', TORY: 'year',
+    TST: 'TSOT', TSOT: 'TSOT',
+    TSP: 'TSOP', TSOP: 'TSOP',
+    TSA: 'TSOA', TSOA: 'TSOA',
+  };
+  // ID3v2タグ本体(buf)から、曲名・アーティスト等・歌詞・ジャケット画像をまとめて取り出す。ID3として読めなければ null
+  function collectId3Tags(buf) {
     const tags = {};
     let artworkBlob = null;
-    const ok = await walkFrames(file, (id, buf, ds, end, ver) => {
+    const ok = parseId3Buffer(buf, (id, b, ds, end, ver) => {
       if (id === 'APIC' || id === 'PIC') {
-        if (!artworkBlob) artworkBlob = parsePicture(buf, ds, end, ver).blob;
+        if (!artworkBlob) artworkBlob = parsePicture(b, ds, end, ver).blob;
         return;
       }
       if (id === 'USLT' || id === 'ULT') {
-        if (!tags.lyrics) tags.lyrics = parseLyricsFrame(buf, ds, end, ver);
+        if (!tags.lyrics) tags.lyrics = parseLyricsFrame(b, ds, end, ver);
         return;
       }
-      const field = TEXT_MAP[id];
+      const field = ID3_TEXT_MAP[id];
       if (!field || tags[field]) return; // 同じ項目が複数あれば、先に見つかった方を使う
-      const enc = buf[ds];
-      const text = decodeText(buf, ds + 1, end, enc);
+      const enc = b[ds];
+      const text = decodeText(b, ds + 1, end, enc);
       if (text) tags[field] = text;
     });
     if (ok === null) return null;
     return { tags, artworkBlob };
+  }
+
+  // WAV(RIFF/WAVE)ファイル用: 中のチャンクを頭から順にたどり、
+  //  ・id3チャンク(ffmpeg/Audacity等で書き出すと付くことがある)があれば、ID3v2として読む(画像・歌詞も読める)
+  //  ・無ければ、LIST/INFOチャンク(簡易な項目名=値の組)から曲名・アーティスト等だけ読む
+  // どちらも無ければ null(呼び出し側は、タグ無しの曲として扱う)
+  const RIFF_INFO_MAP = { INAM: 'title', IART: 'artist', IPRD: 'album', IGNR: 'genre', ICRD: 'year' };
+  function parseRiffInfo(body) {
+    const tags = {};
+    let p = 0;
+    while (p + 8 <= body.length) {
+      const id = String.fromCharCode(...body.subarray(p, p + 4));
+      const size = (body[p + 4] | (body[p + 5] << 8) | (body[p + 6] << 16) | (body[p + 7] << 24)) >>> 0;
+      const ds = p + 8;
+      const end = ds + size;
+      if (end > body.length) break; // サイズがおかしければ打ち切る
+      const field = RIFF_INFO_MAP[id];
+      if (field && !tags[field]) {
+        const text = DECODERS.utf8.decode(body.subarray(ds, end)).replace(/\u0000+$/, '').trim();
+        if (text) tags[field] = text;
+      }
+      p = end + (size % 2); // チャンクは偶数バイト境界に揃う
+    }
+    if (tags.year) { const m = tags.year.match(/\d{4}/); tags.year = m ? m[0] : ''; }
+    return tags;
+  }
+  async function readAllWav(file) {
+    let offset = 12; // "RIFF"+サイズ(4)+"WAVE" の次からチャンクが並ぶ
+    let infoTags = null;
+    for (let i = 0; i < 10000 && offset + 8 <= file.size; i++) { // 壊れたファイルで無限ループしないための保険
+      const h = new Uint8Array(await file.slice(offset, offset + 8).arrayBuffer());
+      const chunkId = String.fromCharCode(h[0], h[1], h[2], h[3]);
+      const size = (h[4] | (h[5] << 8) | (h[6] << 16) | (h[7] << 24)) >>> 0;
+      const bodyStart = offset + 8;
+      if (bodyStart + size > file.size) break; // サイズがおかしければ打ち切る
+      if (chunkId.toLowerCase().startsWith('id3')) {
+        const buf = new Uint8Array(await file.slice(bodyStart, bodyStart + size).arrayBuffer());
+        const r = collectId3Tags(buf);
+        if (r) return r; // id3チャンクがあれば、それを優先して使う
+      } else if (chunkId === 'LIST' && size >= 4) {
+        const listType = new Uint8Array(await file.slice(bodyStart, bodyStart + 4).arrayBuffer());
+        if (String.fromCharCode(...listType) === 'INFO') {
+          const body = new Uint8Array(await file.slice(bodyStart + 4, bodyStart + size).arrayBuffer());
+          infoTags = parseRiffInfo(body);
+        }
+      }
+      offset = bodyStart + size + (size % 2);
+    }
+    // WAVと分かった時点で、タグが無くてもこの結果を使う(jsmediatagsはWAVに対応していないため、呼んでも無駄になる)
+    return { tags: infoTags || {}, artworkBlob: null };
+  }
+
+  // 曲名・アーティスト等・並び替え用の読み・歌詞・ジャケット画像を、まとめて1回の読み込みで取り出す
+  // 戻り値の tags は、今までの jsmediatags 版と同じ形(title/artist/album/genre/year/TSOT/TSOP/TSOA/lyrics が、いずれも文字列)で返す
+  async function readAll(file) {
+    const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+    if (isId3(head)) {
+      const total = 10 + syncsafe(head, 6);
+      if (total > file.size) return null;
+      const buf = new Uint8Array(await file.slice(0, total).arrayBuffer());
+      return collectId3Tags(buf);
+    }
+    if (isRiffWave(head)) return readAllWav(file);
+    return null;
   }
 
   // ---- MP3の長さ ----

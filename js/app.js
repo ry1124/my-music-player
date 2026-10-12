@@ -252,7 +252,7 @@ function bindUIEvents() {
   document.getElementById('btn-select-all').addEventListener('click', toggleSelectAll);
   document.getElementById('btn-select-fav').addEventListener('click', bulkFavoriteSelected);
   document.getElementById('btn-select-addpl').addEventListener('click', bulkAddSelectedToPlaylist);
-  document.getElementById('btn-select-export').addEventListener('click', bulkExportSelected);
+  document.getElementById('btn-select-more').addEventListener('click', openSelectMoreSheet);
   document.getElementById('btn-select-delete').addEventListener('click', bulkDeleteSelected);
   document.getElementById('btn-year-sort').addEventListener('click', () => {
     yearSortOrder = yearSortOrder === 'desc' ? 'asc' : 'desc';
@@ -1836,7 +1836,7 @@ function updateSelectBar() {
   document.getElementById('select-count').textContent = n > 0 ? `${n}曲を選択中` : '曲を選んでください';
   const ids = document.getElementById('track-list')._queueIds || [];
   document.getElementById('btn-select-all').textContent = n > 0 && n === ids.length ? '全解除' : '全選択';
-  ['btn-select-fav', 'btn-select-addpl', 'btn-select-export', 'btn-select-delete'].forEach(id => { document.getElementById(id).disabled = n === 0; });
+  ['btn-select-fav', 'btn-select-addpl', 'btn-select-more', 'btn-select-delete'].forEach(id => { document.getElementById(id).disabled = n === 0; });
 }
 
 // お気に入りに追加(選んだ曲をまとめて)。既にお気に入りの曲はそのまま
@@ -1876,6 +1876,70 @@ async function bulkAddSelectedToPlaylist() {
   renderPlaylistList();
   exitSelectMode();
   showToast(`${added}曲を追加しました`);
+}
+
+// 選択バーの「その他」: 使用頻度が低い操作(まとめて編集・書き出す)をここにまとめ、バーがはみ出さないようにする
+async function openSelectMoreSheet() {
+  const options = ['まとめて編集', '書き出す'];
+  const idx = await showChoiceSheet(`${selectedIds.size}曲を選択中`, options);
+  if (idx < 0) return;
+  if (idx === 0) bulkEditSelected();
+  else bulkExportSelected();
+}
+
+// まとめて編集(選んだ曲のアーティスト名・アルバム名・ジャンル・年代のどれか1項目を、まとめて同じ値に変更する)
+const BULK_EDIT_FIELDS = [
+  { field: 'artist', label: 'アーティスト名' },
+  { field: 'album', label: 'アルバム名' },
+  { field: 'genre', label: 'ジャンル' },
+  { field: 'year', label: '年代' },
+];
+async function bulkEditSelected() {
+  const ids = [...selectedIds];
+  if (ids.length === 0) return;
+  const idx = await showChoiceSheet(`${ids.length}曲をまとめて編集`, BULK_EDIT_FIELDS.map(o => o.label));
+  if (idx < 0) return;
+  const { field, label } = BULK_EDIT_FIELDS[idx];
+
+  let value;
+  if (field === 'genre') {
+    const options = genrePickerOptions();
+    if (options.length === 0) { dialogAlert('ライブラリにまだジャンルがありません。先に1曲だけ編集画面から直接入力してください'); return; }
+    const gi = await showChoiceSheet('ジャンルを選ぶ', options);
+    if (gi < 0) return;
+    value = options[gi];
+  } else if (field === 'year') {
+    const options = [];
+    for (let y = YEAR_PICKER_MAX; y >= YEAR_PICKER_MIN; y--) options.push(String(y));
+    const yi = await showChoiceSheet('年を選ぶ', options);
+    if (yi < 0) return;
+    value = options[yi];
+  } else {
+    const selected = ids.map(id => tracks.find(t => t.id === id)).filter(Boolean);
+    const currentValues = new Set(selected.map(t => (field === 'artist' && t.artist === UNKNOWN_ARTIST) ? '' : (t[field] || '')));
+    const prefill = currentValues.size === 1 ? [...currentValues][0] : '';
+    const input = dialogPrompt(`新しい${label}を入力してください(選んだ${ids.length}曲すべてに適用されます)`, prefill);
+    if (input === null) return;
+    value = input.trim();
+  }
+
+  if (!dialogConfirm(`${ids.length}曲の${label}を「${value || '(空)'}」に変更します。よろしいですか?`)) return;
+  const selected = ids.map(id => tracks.find(t => t.id === id)).filter(Boolean);
+  for (const t of selected) {
+    t[field] = value;
+    if (field === 'artist') {
+      if (!t.artist) t.artist = UNKNOWN_ARTIST;
+      t.artistSort = ''; // 名前が変わったので、古い読み(ふりがな)は捨てる
+    }
+    if (field === 'album') t.albumSort = '';
+    await DB.updateTrack(t);
+  }
+  markLibraryChanged();
+  renderPlaylistList();
+  if (currentTrack && selected.some(t => t.id === currentTrack.id)) updateNowPlayingUI();
+  renderQueueIfOpen();
+  exitSelectMode();
+  showToast(`${selected.length}曲の${label}を変更しました`);
 }
 
 // 書き出し(選んだ曲をまとめて、音声ファイルそのものを共有シート経由で渡す。他の端末では「＋曲を追加」で取り込める)
