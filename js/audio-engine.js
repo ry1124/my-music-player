@@ -67,6 +67,7 @@ const AudioEngine = (() => {
     const calibN = Math.min(db.length, 15);
     const calib = db.slice(0, calibN).slice().sort((a, b) => a - b);
     const floor = calib[Math.floor(calib.length / 2)]; // 最初の約0.3秒の、中央値
+    if (floor > -50) return 0; // 最初から音が鳴っている(静かなイントロ等で、無音ではない)
     const threshold = floor + 12; // そこから12dB大きい音が鳴ったら「始まった」とみなす
     const sustain = 4; // 4区間(約80ms)続けて超えたときだけ採用する(ノイズやクリック音を除く)
     for (let i = 0; i + sustain <= db.length; i++) {

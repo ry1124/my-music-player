@@ -260,6 +260,7 @@ function bindUIEvents() {
     renderYearList();
   });
   document.getElementById('btn-group-sort').addEventListener('click', openArtistTrackSortSheet);
+  document.getElementById('btn-genre-sort').addEventListener('click', openGenreSortSheet);
   document.getElementById('btn-back-group').addEventListener('click', () => {
     // ジャンルの曲一覧から戻るときは、まずアルバム一覧へ戻る
     if (lastGroupListView === 'view-genres' && genreCtx && genreCtx.album !== null) {
@@ -756,15 +757,76 @@ function titleRoughlyMatches(queryTitle, candidateTitle) {
   return a === b || a.includes(b) || b.includes(a);
 }
 
-async function fetchLrcFromLrclib(artist, title, duration, expectJapanese) {
-  const searchUrl = `${LRCLIB_BASE}/search?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`;
-  const res = await fetch(searchUrl);
+// 検索用に曲名を整える: 括弧の中(TV Size・Remaster・feat. 等)と、「 - 〇〇Ver.」「feat. 〇〇」以降を取り除く
+function cleanTitleForSearch(s) {
+  const t = (s || '').normalize('NFKC')
+    .replace(/\s*[(\[【〈《「『][^)\]】〉》」』]*[)\]】〉》」』]/g, ' ')
+    .replace(/\s+(feat\.?|ft\.?)\s.*$/i, '')
+    .replace(/\s+[-–—]\s+.*$/, '')
+    .replace(/\s+/g, ' ').trim();
+  return t || (s || '').trim();
+}
+// 検索用にアーティスト名を整える: 「キャラ名(CV:声優)」の括弧や、feat./&/、/× 以降の共演者を取り除き、最初の1組だけにする
+function cleanArtistForSearch(s) {
+  const t = (s || '').normalize('NFKC')
+    .replace(/\s*[(\[【][^)\]】]*[)\]】]/g, ' ')
+    .split(/\s*(?:\bfeat\.?|\bft\.?|&|,|、|×|\/|\s+x\s+|\s+with\s+)\s*/i)[0]
+    .replace(/\s+/g, ' ').trim();
+  return t || (s || '').trim();
+}
+function artistRoughlyMatches(a, b) {
+  const x = normalizeForMatch(cleanArtistForSearch(a));
+  const y = normalizeForMatch(cleanArtistForSearch(b));
+  return !!x && !!y && (x === y || x.includes(y) || y.includes(x));
+}
+async function lrclibSearch(params) {
+  const qs = Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  const res = await fetch(`${LRCLIB_BASE}/search?${qs}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const list = (await res.json()).filter(r =>
-    !r.instrumental &&
-    (r.syncedLyrics || r.plainLyrics) &&
-    titleRoughlyMatches(title, r.trackName) &&
-    !lyricsLanguageMismatch(expectJapanese, r));
+  return res.json();
+}
+
+// 表記を変えながら何回か検索する(見つからない曲を減らすため)。長さの合う時刻付きの版が見つかった時点で打ち切る
+async function fetchLrcFromLrclib(artist, title, duration, expectJapanese) {
+  const hasArtist = !!(artist && artist.trim() && artist !== UNKNOWN_ARTIST); // 「不明なアーティスト」で検索しても見つからない
+  const cTitle = cleanTitleForSearch(title);
+  const cArtist = hasArtist ? cleanArtistForSearch(artist) : '';
+  const queries = [];
+  if (hasArtist) queries.push({ artist_name: artist, track_name: title });
+  if (hasArtist && (cArtist !== artist || cTitle !== title)) queries.push({ artist_name: cArtist, track_name: cTitle });
+  if (hasArtist) queries.push({ q: `${cTitle} ${cArtist}` }); // アーティスト名の登録の仕方が違っても拾えるように
+  queries.push({ track_name: cTitle }); // 曲名だけ(アーティスト名がローマ字/漢字で違う場合など)
+  const seen = new Set();
+  let list = [];
+  let best = null;
+  let lastError = null;
+  for (const [qi, q] of queries.entries()) {
+    if (qi > 0) await new Promise(r => setTimeout(r, 150)); // lrclib.netへの負荷を避ける
+    const byTitleOnly = !q.artist_name;
+    let results;
+    try {
+      results = await lrclibSearch(q);
+    } catch (err) {
+      lastError = err; // 1回の失敗(一時的なエラー)で、それまでの結果を捨てない
+      continue;
+    }
+    const fresh = results.filter((r) => { if (seen.has(r.id)) return false; seen.add(r.id); return true; });
+    list = list.concat(fresh.filter(r =>
+      !r.instrumental &&
+      (r.syncedLyrics || r.plainLyrics) &&
+      (titleRoughlyMatches(title, r.trackName) || titleRoughlyMatches(cTitle, cleanTitleForSearch(r.trackName))) &&
+      !lyricsLanguageMismatch(expectJapanese, r) &&
+      // アーティストを指定しない検索では、同じ曲名の別の曲を拾わないよう、アーティストか長さのどちらかが合うものだけ
+      (!byTitleOnly || (hasArtist && artistRoughlyMatches(artist, r.artistName)) ||
+        (duration > 0 && r.duration > 0 && Math.abs(r.duration - duration) <= 2))));
+    best = pickLyricVersion(list, duration);
+    if (best && best.syncedLyrics && best.matchedByDuration) return best;
+  }
+  if (!best && lastError && seen.size === 0) throw lastError; // どの検索も通らなかった(オフライン等)
+  return best;
+}
+
+function pickLyricVersion(list, duration) {
   if (list.length === 0) return null;
   const diff = (r) => (duration > 0 && r.duration > 0 ? Math.abs(r.duration - duration) : Infinity);
   // 1) 長さが近く、時刻付きの歌詞がある版 → 2) 長さが近い、時刻なしの歌詞 → 3) それ以外(長さが分からない場合の最後の手段)
@@ -779,6 +841,18 @@ async function fetchLrcFromLrclib(artist, title, duration, expectJapanese) {
   return list.find(r => r.syncedLyrics) || list[0];
 }
 
+// 手元のファイルが歌詞データの版より長く、その差のほとんどが「曲の頭の無音」で説明できるときは、
+// 頭の無音の分だけ歌詞を遅らせる(ずれの自動補正)。それ以外(差が小さい・曲の終わり側の違いかもしれない)は補正しない
+async function estimateLeadOffset(track, data) {
+  const extra = (track.duration || 0) - (data.duration || 0);
+  if (!(extra >= 0.7)) return 0;
+  try {
+    const silence = await AudioEngine.detectLeadSilence(track.fileBlob);
+    if (silence >= extra * 0.7) return -Math.round(Math.min(extra, silence) * 10) / 10; // マイナス = 歌詞が遅く出る
+  } catch (err) { /* 解析できない形式なら補正しない */ }
+  return 0;
+}
+
 // 1曲分の歌詞を検索して、その曲に反映する。反映できたら 'synced' / 'plain'、見つからなければ null
 async function applyLyricsFromNet(track, onlyIfMatched = false) {
   // J-Pop/アニメは、曲名・アーティスト名がローマ字表記でも歌詞は日本語のはず
@@ -787,14 +861,15 @@ async function applyLyricsFromNet(track, onlyIfMatched = false) {
   if (!data || !(data.syncedLyrics || data.plainLyrics)) return null;
   if (onlyIfMatched && !(data.syncedLyrics && data.matchedByDuration)) return null; // 入れ直しモード: 長さの合う時刻付きの版が見つかったときだけ差し替える
   if (data.syncedLyrics) {
-    const synced = parseLrc(data.syncedLyrics);
+    // 「作词 : 〇〇」「作曲：〇〇」のようなクレジット行は歌詞ではないので除く
+    const synced = parseLrc(data.syncedLyrics).filter(l => !/^\s*(作[词詞曲]|[编編]曲|lyrics|composer|arranger)\s*[:：]/i.test(l.text || ''));
     track.syncedLyrics = synced.length > 0 ? synced : null;
     track.lyrics = synced.length > 0 ? synced.map(l => l.text).filter(Boolean).join('\n') : data.plainLyrics || '';
   } else {
     track.syncedLyrics = null;
     track.lyrics = data.plainLyrics;
   }
-  track.lyricOffset = 0;
+  track.lyricOffset = track.syncedLyrics ? await estimateLeadOffset(track, data) : 0;
   track.lyricsDurationMatched = !!data.matchedByDuration; // 曲の長さに合う版を採用した印(入れ直しの対象から外す)
   await DB.updateTrack(track);
   return track.syncedLyrics ? 'synced' : 'plain';
@@ -1063,7 +1138,39 @@ function renderGroupList(listElId, groupFn, sortFn, keyFn, cacheKey = '', filter
 }
 
 function renderYearList() { renderGroupList('year-list', yearLabel, yearSortFn, null, yearSortOrder); }
-function renderGenreList() { renderGroupList('genre-list', genreLabel); }
+const GENRE_SORTS = [
+  { key: 'name', label: '名前順' },
+  { key: 'count', label: '曲数が多い順' },
+  { key: 'recent', label: '最近追加した順' },
+];
+let genreSort = Settings.get('genreSort') || 'name';
+function renderGenreList() {
+  document.getElementById('btn-genre-sort').textContent = (GENRE_SORTS.find(s => s.key === genreSort) || GENRE_SORTS[0]).label;
+  let sortFn = defaultLabelSort;
+  if (genreSort === 'count' || genreSort === 'recent') {
+    const count = new Map();
+    const latest = new Map();
+    tracks.forEach((t) => {
+      const g = genreLabel(t);
+      count.set(g, (count.get(g) || 0) + 1);
+      latest.set(g, Math.max(latest.get(g) || 0, t.addedAt || 0));
+    });
+    const val = genreSort === 'count' ? count : latest;
+    sortFn = (a, b) => {
+      if (a === '不明') return 1;
+      if (b === '不明') return -1;
+      return (val.get(b) - val.get(a)) || defaultLabelSort(a, b);
+    };
+  }
+  renderGroupList('genre-list', genreLabel, sortFn, null, genreSort);
+}
+async function openGenreSortSheet() {
+  const idx = await showChoiceSheet('ジャンルの並び順', GENRE_SORTS.map(s => (s.key === genreSort ? '✓ ' : '') + s.label));
+  if (idx < 0) return;
+  genreSort = GENRE_SORTS[idx].key;
+  Settings.set('genreSort', genreSort);
+  renderGenreList();
+}
 
 function artistLabel(track) {
   return track.artist && track.artist.trim() && track.artist !== UNKNOWN_ARTIST ? track.artist.trim() : '不明';
@@ -1300,8 +1407,8 @@ function renderGenreSubFilter(groupTracks) {
   const selOrigins = new Set(); // 選択中の上の段(key)
   const selGenres = new Set();  // 選択中の下の段(ジャンル名)
 
-  // 下の段のチップ名。特撮は「ウルトラマン」「仮面ライダー」に分け、判別できない曲は元のジャンル名(特撮)のまま
-  const chipGenre = (t) => tokusatsuSeries(t) || genreLabel(t);
+  // 下の段のチップ名。特撮はシリーズ(ウルトラマン・仮面ライダー等)に分けず、表記ゆれ(とくさつ・Tokusatsu等)も含めて「特撮」1つにまとめる
+  const chipGenre = (t) => (isTokusatsu(t) ? '特撮' : genreLabel(t));
   const noSelection = () => selOrigins.size === 0 && selGenres.size === 0;
   const isSelected = (t) => {
     const k = originKey(t);
