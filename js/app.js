@@ -693,6 +693,41 @@ function importLyricsForTrack(track) {
   input.click();
 }
 
+// 歌詞ファイル(.lrc/.txt)を、どの曲のものか決める。次の順に探す:
+//  1) 元の音楽ファイルと同じ名前(パソコンの時刻合わせツールは、この名前で書き出す)
+//  2) LRCの中の [ti:曲名] [ar:アーティスト] (同じ曲名が複数あれば [length:] の長さが近い方)
+//  3) ファイル名 = 曲名(以前からの方式)
+function lrcHeader(text, key) {
+  const m = text.match(new RegExp(`^\\s*\\[${key}:([^\\]]*)\\]`, 'mi'));
+  return m ? m[1].trim() : '';
+}
+function audioBaseName(track) {
+  const name = (track.fileBlob && track.fileBlob.name) || String(track.sourceKey || '').replace(/_\d+_\d+$/, '');
+  return name.replace(/\.[^/.]+$/, '');
+}
+function findTrackForLyricsFile(fileName, text) {
+  const norm = (s) => (s || '').normalize('NFKC').trim();
+  const base = norm(fileName.replace(/\.[^/.]+$/, ''));
+  const byFile = tracks.filter(t => norm(audioBaseName(t)) === base);
+  if (byFile.length === 1) return byFile[0];
+  const ti = lrcHeader(text, 'ti');
+  const ar = lrcHeader(text, 'ar');
+  const lenMatch = lrcHeader(text, 'length').match(/(\d+):(\d+(?:\.\d+)?)/);
+  const len = lenMatch ? parseInt(lenMatch[1], 10) * 60 + parseFloat(lenMatch[2]) : 0;
+  const closest = (list) => (len > 0 ? list.slice().sort((a, b) => Math.abs((a.duration || 0) - len) - Math.abs((b.duration || 0) - len)) : list)[0];
+  if (ti) {
+    let list = tracks.filter(t => normalizeForMatch(t.title) === normalizeForMatch(ti));
+    if (ar && list.length > 1) {
+      const sameArtist = list.filter(t => normalizeForMatch(t.artist) === normalizeForMatch(ar));
+      if (sameArtist.length > 0) list = sameArtist;
+    }
+    if (list.length > 0) return closest(list);
+  }
+  if (byFile.length > 1) return closest(byFile);
+  const byTitle = tracks.filter(t => norm(t.title) === base);
+  return byTitle.length > 0 ? closest(byTitle) : null;
+}
+
 async function handleLyricsFilesSelected(fileList) {
   const files = Array.from(fileList);
   if (files.length === 0) return;
@@ -700,12 +735,17 @@ async function handleLyricsFilesSelected(fileList) {
   let syncedCount = 0;
   const unmatchedNames = [];
   for (const file of files) {
-    const baseName = file.name.replace(/\.[^/.]+$/, '').trim();
-    const track = tracks.find(t => t.title.trim() === baseName);
-    if (!track) { unmatchedNames.push(file.name); continue; }
     try {
       const text = await file.text();
+      const track = findTrackForLyricsFile(file.name, text);
+      if (!track) { unmatchedNames.push(file.name); continue; }
       applyLyricsText(track, text);
+      if (track.syncedLyrics) {
+        // 読み込んだ時刻は、この曲のファイルに合わせたもの: 以前の「ずれ」設定は捨て、
+        // 「ずれ直し(lrclibの版で入れ直す)」で上書きされないようにする
+        track.lyricOffset = 0;
+        track.lyricsDurationMatched = true;
+      }
       await DB.updateTrack(track);
       matched++;
       if (track.syncedLyrics) syncedCount++;
