@@ -3049,6 +3049,7 @@ function playTrackById(id, queueIds) {
 let playCounted = false; // 今の再生を、再生回数に数えたか
 let wantsToPlay = false; // 最後に自分で選んだ意図が「再生」か「一時停止」か(電話などで強制的に止められたのと、自分で止めたのを見分けるため)
 let jointDisabled = false;  // 2つめの要素で再生できなかった端末では、その起動中は重ねを使わない
+let jointPausedUntilVisible = false; // 画面ロック中などに重ねられなかったときは、画面に戻るまで重ねを休む
 let jointBusy = false;      // 曲の重ね(クロスフェード/ギャップレス)の最中
 let jointOldEl = null;      // 重ねの最中に、消えていく方の要素
 let jointStartTimer = null; // ギャップレス: 曲の終わりの直前に、次の曲を始める予約
@@ -3090,13 +3091,26 @@ function loadAndPlay(track, index, opts = {}) {
     const fadeSec = opts.fadeSec || 0;
     fadeVolume(el, true, fadeSec);
     if (fadeSec > 0) fadeVolume(oldEl, false, fadeSec);
-    jointEndTimer = setTimeout(() => {
+    let waitedOnce = false;
+    const finishJoint = () => {
+      jointEndTimer = null;
+      if (audioEl !== el) return; // すでに別の操作で切り替わっていれば、何もしない
+      // 新しい曲が本当に鳴り始めたか確かめてから、前の曲を止める。
+      // (画面ロック中などは、2つめの要素の再生を断られたり、返事が来ないまま止まっていたりすることがあり、
+      //  確かめずに前の曲を止めると、どちらも鳴っていない＝再生が止まった状態になる)
+      if (!el.paused && el.currentTime < 0.05 && !waitedOnce) {
+        waitedOnce = true; // まだ読み込み中かもしれないので、少しだけ待つ
+        jointEndTimer = setTimeout(finishJoint, 1500);
+        return;
+      }
+      if (el.paused || el.currentTime < 0.05) { abortJoint(el, prev); return; }
+      setVolumeImmediate(el, 1); // 裏に回っていてフェードが最後まで進まなかった場合も、音量を必ず戻す
       oldEl.pause();
       setVolumeImmediate(oldEl, 1);
       if (jointOldEl === oldEl) jointOldEl = null;
       jointBusy = false;
-      jointEndTimer = null;
-    }, (fadeSec + 0.2) * 1000);
+    };
+    jointEndTimer = setTimeout(finishJoint, (fadeSec + 0.2) * 1000);
   } else {
     setVolumeImmediate(el, 1);
   }
@@ -3185,9 +3199,10 @@ function verifyProgressing(track, el, startTime, tries) {
 
 // ---- フェード(クロスフェード): AudioContextを使わず、<audio>のvolumeを直接動かす ----
 // (AudioContext経由にすると、ロック画面でiOSに止められて無音になるため)
-const fadeRaf = new Map(); // audio要素 → 実行中のrequestAnimationFrame id
+// (requestAnimationFrameは画面ロック中・裏に回っている間は動かず、音量が途中のまま止まるため、タイマーで動かす)
+const fadeTimers = new Map(); // audio要素 → 実行中のタイマーid
 function cancelFade(el) {
-  if (fadeRaf.has(el)) { cancelAnimationFrame(fadeRaf.get(el)); fadeRaf.delete(el); }
+  if (fadeTimers.has(el)) { clearInterval(fadeTimers.get(el)); fadeTimers.delete(el); }
 }
 function setVolumeImmediate(el, value) { cancelFade(el); el.volume = value; }
 function fadeVolume(el, up, sec) {
@@ -3198,15 +3213,13 @@ function fadeVolume(el, up, sec) {
   el.volume = from;
   const start = performance.now();
   const dur = sec * 1000;
-  const step = (now) => {
-    const t = Math.min(1, (now - start) / dur);
-    const curve = up ? Math.sin(t * Math.PI / 2) : Math.cos(t * Math.PI / 2); // 等パワーカーブ
+  const step = () => {
+    const t = Math.min(1, (performance.now() - start) / dur);
+    const curve = up ? Math.sin(t * Math.PI / 2) : 1 - Math.cos(t * Math.PI / 2); // 等パワーカーブ
     el.volume = Math.max(0, Math.min(1, from + (to - from) * curve)); // 浮動小数の誤差で0〜1を超えないように
-
-    if (t < 1) fadeRaf.set(el, requestAnimationFrame(step));
-    else fadeRaf.delete(el);
+    if (t >= 1) cancelFade(el);
   };
-  fadeRaf.set(el, requestAnimationFrame(step));
+  fadeTimers.set(el, setInterval(step, 50));
 }
 
 // ---- 音量の自動そろえ: 波形を加工した音声ファイルを、曲ごとに1回だけ作って保存する ----
@@ -3309,7 +3322,10 @@ const otherElement = () => (audioEl === audioA ? audioB : audioA);
 function abortJoint(newEl, prev) {
   const oldEl = jointOldEl || otherElementOf(newEl);
   if (audioEl !== newEl) return; // すでに別の操作で切り替わっていれば、何もしない
-  jointDisabled = true;
+  // 画面ロック中・裏に回っているときだけ断られることもあるので、その場合は画面に戻るまでだけ重ねを休む
+  const visible = document.visibilityState === 'visible';
+  if (visible) jointDisabled = true;
+  else jointPausedUntilVisible = true;
   clearTimeout(jointEndTimer); jointEndTimer = null;
   jointOldEl = null;
   jointBusy = false;
@@ -3322,7 +3338,7 @@ function abortJoint(newEl, prev) {
   updateMediaSession();
   refreshPlayingHighlight();
   renderQueueIfOpen();
-  showToast('この端末では、曲の重ねを使えませんでした。通常の切り替えにします');
+  if (visible) showToast('この端末では、曲の重ねを使えませんでした。通常の切り替えにします');
   const ended = oldEl.ended || (isFinite(oldEl.duration) && oldEl.currentTime >= oldEl.duration - 0.05);
   if (ended) playNext(); // 前の曲が、すでに終わっていたら、そのまま次の曲へ
   else if (oldEl.paused) oldEl.play().catch(() => {});
@@ -3363,7 +3379,7 @@ function startJoint(fadeSec) {
 // 再生中の曲の残りが少なくなったら、次の曲を先に読み込み、重ねる(timeupdate から、約0.25秒ごとに呼ぶ)
 function checkJoint() {
   const mode = Settings.get('joint');
-  if (mode === 'off' || jointDisabled || jointBusy || audioEl.paused || repeatMode === 'one') return;
+  if (mode === 'off' || jointDisabled || jointPausedUntilVisible || jointBusy || audioEl.paused || repeatMode === 'one') return;
   const d = audioEl.duration;
   if (!d || !isFinite(d)) return;
   const remaining = d - audioEl.currentTime;
@@ -4015,6 +4031,7 @@ async function openSleepTimerSheet() {
 // アプリが裏に回る/閉じられる直前にも保存する
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { savePlaybackState(true); return; }
+  jointPausedUntilVisible = false;
   attemptResume(5, true); // 電話などで強制的に止められて、画面に戻ってきたときは、自動で再開する
   autoCheckUpdateSilently(); // ホーム画面から復帰したときにも、新しいバージョンがないか裏で確認する
 });
