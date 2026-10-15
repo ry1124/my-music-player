@@ -781,9 +781,48 @@ function artistRoughlyMatches(a, b) {
 }
 async function lrclibSearch(params) {
   const qs = Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-  const res = await fetch(`${LRCLIB_BASE}/search?${qs}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await fetch(`${LRCLIB_BASE}/search?${qs}`);
+    } catch (err) {
+      // 通信が一瞬切れた等。1回だけ再試行する
+      if (attempt === 0) { await new Promise(r => setTimeout(r, 800)); continue; }
+      throw err;
+    }
+    if (res.ok) return res.json();
+    // lrclib.netは混雑時に一時的な503等を返すことがあるので、1回だけ少し待って再試行する
+    if (attempt === 0 && (res.status >= 500 || res.status === 429)) { await new Promise(r => setTimeout(r, 800)); continue; }
+    throw new Error(`HTTP ${res.status}`);
+  }
+}
+
+// 歌詞の先頭などに入っている「作词 : 〇〇」「作曲：〇〇」のようなクレジット行(歌詞ではない)
+const LYRIC_CREDIT_RE = /^\s*(作[词詞曲]|[编編]曲|lyrics|composer|arranger)\s*[:：]/i;
+function lyricTextLines(r) {
+  const src = r.syncedLyrics ? parseLrc(r.syncedLyrics).map(l => l.text) : (r.plainLyrics || '').split(/\r?\n/);
+  return src.map(s => (s || '').trim()).filter(s => s && !LYRIC_CREDIT_RE.test(s));
+}
+// 本人の版に歌詞が無い(権利の関係で消されている等)とき用: 同じ曲名のカバー版の歌詞を、文字だけで使う。
+// 同じ曲名の別の曲を拾わないよう、2組以上の別々のアーティストで歌詞の出だしが一致したときだけ採用する。
+// ただし曲名に元の歌手名が書かれているもの(「らいおんハート(SMAP)」のようなオルゴール・カラオケ版)は、1件でも採用する
+function pickCoverLyrics(candidates, artist) {
+  const own = artist ? normalizeForMatch(cleanArtistForSearch(artist)) : '';
+  const credited = own.length >= 2 && candidates.find(r => normalizeForMatch(r.trackName).includes(own) && lyricTextLines(r).length > 0);
+  const groups = new Map(); // 歌詞の出だし → { artists, lines }
+  candidates.forEach((r) => {
+    const lines = lyricTextLines(r);
+    const key = normalizeForMatch(lines.slice(0, 2).join(''));
+    if (key.length < 4) return;
+    if (!groups.has(key)) groups.set(key, { artists: new Set(), lines });
+    const g = groups.get(key);
+    g.artists.add(normalizeForMatch(r.artistName));
+    if (lines.length > g.lines.length) g.lines = lines;
+  });
+  const best = [...groups.values()].filter(g => g.artists.size >= 2).sort((a, b) => b.artists.size - a.artists.size)[0];
+  if (best) return { plainLyrics: best.lines.join('\n'), syncedLyrics: null, matchedByDuration: false, fromCover: true };
+  if (credited) return { plainLyrics: lyricTextLines(credited).join('\n'), syncedLyrics: null, matchedByDuration: false, fromCover: true };
+  return null;
 }
 
 // 表記を変えながら何回か検索する(見つからない曲を減らすため)。長さの合う時刻付きの版が見つかった時点で打ち切る
@@ -798,8 +837,12 @@ async function fetchLrcFromLrclib(artist, title, duration, expectJapanese) {
   queries.push({ track_name: cTitle }); // 曲名だけ(アーティスト名がローマ字/漢字で違う場合など)
   const seen = new Set();
   let list = [];
+  let covers = [];
+  let ownNear = false;
   let best = null;
   let lastError = null;
+  const exactTitle = normalizeForMatch(cTitle);
+  const durationNear = (r) => duration > 0 && r.duration > 0 && Math.abs(r.duration - duration) <= 2;
   for (const [qi, q] of queries.entries()) {
     if (qi > 0) await new Promise(r => setTimeout(r, 150)); // lrclib.netへの負荷を避ける
     const byTitleOnly = !q.artist_name;
@@ -811,19 +854,29 @@ async function fetchLrcFromLrclib(artist, title, duration, expectJapanese) {
       continue;
     }
     const fresh = results.filter((r) => { if (seen.has(r.id)) return false; seen.add(r.id); return true; });
-    list = list.concat(fresh.filter(r =>
-      !r.instrumental &&
-      (r.syncedLyrics || r.plainLyrics) &&
-      (titleRoughlyMatches(title, r.trackName) || titleRoughlyMatches(cTitle, cleanTitleForSearch(r.trackName))) &&
-      !lyricsLanguageMismatch(expectJapanese, r) &&
-      // アーティストを指定しない検索では、同じ曲名の別の曲を拾わないよう、アーティストか長さのどちらかが合うものだけ
-      (!byTitleOnly || (hasArtist && artistRoughlyMatches(artist, r.artistName)) ||
-        (duration > 0 && r.duration > 0 && Math.abs(r.duration - duration) <= 2))));
+    // 自分のアーティスト名で長さの合う版があるのに、歌詞が空(権利の関係で消されている等)なら、本人の録音はそれ。
+    // そのとき別名義で長さの近い版はカバーなので、時刻付きでは使わない
+    if (hasArtist && fresh.some(r => artistRoughlyMatches(artist, r.artistName) && durationNear(r) && !r.syncedLyrics && !r.plainLyrics)) ownNear = true;
+    fresh.forEach((r) => {
+      if (r.instrumental || !(r.syncedLyrics || r.plainLyrics) || lyricsLanguageMismatch(expectJapanese, r)) return;
+      if (!(titleRoughlyMatches(title, r.trackName) || titleRoughlyMatches(cTitle, cleanTitleForSearch(r.trackName)))) return;
+      if (!byTitleOnly) { list.push(r); return; }
+      // アーティストを指定しない検索の結果は、同じ曲名の別の曲・別の歌手のカバーが混じる
+      //  ・アーティストが合う / アーティスト不明の曲で長さが合う → そのまま使う
+      //  ・表記の文字の種類が違う(Kenshi Yonezu と 米津玄師 など)で長さが合う → 同じ歌手の別表記とみなして使う
+      //  ・それ以外(SMAPの曲の、槇原敬之版など) → カバー版。演奏が違い時刻がずれるので、本人の版が見つからないときに文字だけで使う
+      const artistOk = hasArtist && artistRoughlyMatches(artist, r.artistName);
+      const otherScript = hasArtist && !ownNear && containsJapanese(artist) !== containsJapanese(r.artistName);
+      if (artistOk || (durationNear(r) && (!hasArtist || otherScript))) list.push(r);
+      else if (normalizeForMatch(cleanTitleForSearch(r.trackName)) === exactTitle) covers.push(r);
+    });
     best = pickLyricVersion(list, duration);
     if (best && best.syncedLyrics && best.matchedByDuration) return best;
   }
-  if (!best && lastError && seen.size === 0) throw lastError; // どの検索も通らなかった(オフライン等)
-  return best;
+  const result = best || pickCoverLyrics(covers, hasArtist ? artist : '');
+  // 通信エラーで探しきれなかったときは「見つからない」ではなくエラーにする(あとで検索し直せば見つかる可能性がある)
+  if (!result && lastError) throw lastError;
+  return result;
 }
 
 function pickLyricVersion(list, duration) {
@@ -862,7 +915,7 @@ async function applyLyricsFromNet(track, onlyIfMatched = false) {
   if (onlyIfMatched && !(data.syncedLyrics && data.matchedByDuration)) return null; // 入れ直しモード: 長さの合う時刻付きの版が見つかったときだけ差し替える
   if (data.syncedLyrics) {
     // 「作词 : 〇〇」「作曲：〇〇」のようなクレジット行は歌詞ではないので除く
-    const synced = parseLrc(data.syncedLyrics).filter(l => !/^\s*(作[词詞曲]|[编編]曲|lyrics|composer|arranger)\s*[:：]/i.test(l.text || ''));
+    const synced = parseLrc(data.syncedLyrics).filter(l => !LYRIC_CREDIT_RE.test(l.text || ''));
     track.syncedLyrics = synced.length > 0 ? synced : null;
     track.lyrics = synced.length > 0 ? synced.map(l => l.text).filter(Boolean).join('\n') : data.plainLyrics || '';
   } else {
