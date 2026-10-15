@@ -3171,7 +3171,9 @@ function playNext() {
     currentIndex = nextIndex; // ライブラリに無い曲(削除済み)は飛ばす
     nextIndex = nextQueueIndex();
   }
+  wantsToPlay = false; // 再生待ちの最後まで聴き終えた
   audioEl.pause();
+  applyPendingReloadIfIdle();
 }
 
 function playPrev() {
@@ -3367,7 +3369,15 @@ async function applyServiceWorkerUpdate() {
 
 let autoUpdateNoticeShown = false;
 let autoUpdateCheckInFlight = false;
-let pendingAutoReload = false; // 曲の再生中に新バージョンを検知したとき: 再生が止まったら更新する
+let pendingAutoReload = false; // 曲の再生中に新バージョンを検知したとき: 自分で止めたら更新する
+// 聴いている最中か。audioEl.paused だけだと、曲の切り替わり・電話や通知での一時停止・裏に回ったときの中断も「止まっている」扱いになり、
+// その瞬間に画面を更新して再生が途切れてしまうため、自分で止めたか(wantsToPlay)で判断する
+function isListening() {
+  return !!currentTrack && (wantsToPlay || !audioEl.paused);
+}
+function applyPendingReloadIfIdle() {
+  if (pendingAutoReload && !isListening()) location.reload();
+}
 // アプリを開いた・前面に戻ったときに、裏で静かにバージョンを確認する(ユーザーが設定画面を開く必要がないようにするため)
 async function autoCheckUpdateSilently() {
   if (autoUpdateCheckInFlight || autoUpdateNoticeShown) return;
@@ -3377,10 +3387,10 @@ async function autoCheckUpdateSilently() {
     if (latest !== APP_VERSION) {
       autoUpdateNoticeShown = true;
       await applyServiceWorkerUpdate();
-      if (currentTrack && !audioEl.paused) {
-        // 再生中にいきなり画面を切り替えないよう、曲の再生が止まったタイミングで更新する(onAudio('pause', ...)内)
+      if (isListening()) {
+        // 再生中にいきなり画面を切り替えないよう、自分で再生を止めたタイミングで更新する(applyPendingReloadIfIdle)
         pendingAutoReload = true;
-        showToast(`新しいバージョン(${latest})があります。再生が終わり次第、更新します`);
+        showToast(`新しいバージョン(${latest})があります。再生を止めたときに更新します`);
       } else {
         location.reload();
       }
@@ -3401,9 +3411,9 @@ async function checkForUpdate() {
     } else {
       autoUpdateNoticeShown = true;
       await applyServiceWorkerUpdate();
-      if (currentTrack && !audioEl.paused) {
+      if (isListening()) {
         pendingAutoReload = true;
-        statusEl.textContent = `新しいバージョン(${latest})に更新しました。再生が終わり次第、画面が更新されます。`;
+        statusEl.textContent = `新しいバージョン(${latest})に更新しました。再生を止めたときに画面が更新されます。`;
       } else {
         statusEl.textContent = `新しいバージョン(${latest})に更新しました。まもなく画面が更新されます。`;
         setTimeout(() => location.reload(), 600); // メッセージが一瞬見えるよう、少し待ってから更新する
@@ -3735,6 +3745,7 @@ function setSleepTimer(minutes) {
   clearSleepTimer();
   sleepTimerEndAt = Date.now() + minutes * 60000;
   sleepTimerId = setTimeout(() => {
+    wantsToPlay = false;
     audioEl.pause();
     sleepTimerId = null;
     sleepTimerEndAt = null;
@@ -3784,14 +3795,17 @@ function bindAudioEvents() {
   onAudio('pause', () => {
     clearJointStartTimer(); savePlaybackState(true); setPlayPauseIcon(false);
     if (lyricRaf !== null) { cancelAnimationFrame(lyricRaf); lyricRaf = null; }
-    if (pendingAutoReload) location.reload(); // 新バージョンの検知を再生中に保留していた場合、止まったタイミングで更新する
+    // 曲の終わり(次の曲へ移る直前)や電話・通知でもpauseは起きるので、自分で止めたときだけ更新する
+    applyPendingReloadIfIdle();
   });
   onAudio('seeked', () => { clearJointStartTimer(); highlightCurrentLyricLine(); });
   onAudio('ended', () => {
     if (sleepTimerEndOfTrack) {
       sleepTimerEndOfTrack = false;
+      wantsToPlay = false;
       updateSleepTimerUI();
       showToast('スリープタイマーで再生を止めました');
+      applyPendingReloadIfIdle();
       return; // 次の曲へは進まず、ここで止まる
     }
     if (repeatMode === 'one') {
