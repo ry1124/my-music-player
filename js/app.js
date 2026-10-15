@@ -728,27 +728,48 @@ function findTrackForLyricsFile(fileName, text) {
   return byTitle.length > 0 ? closest(byTitle) : null;
 }
 
+function parseLyricsBundle(text) {
+  if (!/^\s*\{/.test(text)) return null;
+  try {
+    const data = JSON.parse(text);
+    return data && data.format === 'MyMusicLyricsBundle' && Array.isArray(data.items) ? data : null;
+  } catch (e) { return null; }
+}
+
 async function handleLyricsFilesSelected(fileList) {
   const files = Array.from(fileList);
   if (files.length === 0) return;
   let matched = 0;
   let syncedCount = 0;
   const unmatchedNames = [];
+  const applyOne = async (name, text) => {
+    const track = findTrackForLyricsFile(name, text);
+    if (!track) { unmatchedNames.push(name); return; }
+    applyLyricsText(track, text);
+    if (track.syncedLyrics) {
+      // 読み込んだ時刻は、この曲のファイルに合わせたもの: 以前の「ずれ」設定は捨て、
+      // 「ずれ直し(lrclibの版で入れ直す)」で上書きされないようにする
+      track.lyricOffset = 0;
+      track.lyricsDurationMatched = true;
+    }
+    await DB.updateTrack(track);
+    matched++;
+    if (track.syncedLyrics) syncedCount++;
+  };
+  const progressEl = document.getElementById('import-progress');
   for (const file of files) {
     try {
       const text = await file.text();
-      const track = findTrackForLyricsFile(file.name, text);
-      if (!track) { unmatchedNames.push(file.name); continue; }
-      applyLyricsText(track, text);
-      if (track.syncedLyrics) {
-        // 読み込んだ時刻は、この曲のファイルに合わせたもの: 以前の「ずれ」設定は捨て、
-        // 「ずれ直し(lrclibの版で入れ直す)」で上書きされないようにする
-        track.lyricOffset = 0;
-        track.lyricsDurationMatched = true;
+      const bundle = parseLyricsBundle(text);
+      if (!bundle) { await applyOne(file.name, text); continue; }
+      // パソコンの時刻合わせツールが作る「まとめファイル」: 全曲分の歌詞が1つに入っている
+      progressEl.classList.remove('hidden');
+      for (let i = 0; i < bundle.items.length; i++) {
+        const it = bundle.items[i];
+        if (i % 50 === 0) progressEl.textContent = `歌詞を読み込み中... ${i}/${bundle.items.length}曲`;
+        if (it && typeof it.file === 'string' && typeof it.lrc === 'string') await applyOne(it.file, it.lrc);
       }
-      await DB.updateTrack(track);
-      matched++;
-      if (track.syncedLyrics) syncedCount++;
+      progressEl.classList.add('hidden');
     } catch (err) {
       console.error('歌詞読み込み失敗:', file.name, err);
       unmatchedNames.push(file.name);
