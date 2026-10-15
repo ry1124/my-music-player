@@ -1191,8 +1191,23 @@ function groupDetailHasIndex() {
 function renderGroupDetailList(list) {
   setGroupMode('tracks');
   const listEl = document.getElementById('group-detail-list');
+  // 詳細画面を開いた時点の曲一覧を使い回すので、その後ライブラリから削除された曲を除く
+  const alive = new Set(tracks.map(t => t.id));
+  list = list.filter(t => alive.has(t.id));
+  listEl._lastList = list;
   fillTrackList(listEl, list, list.map(t => t.id), groupDetailHasIndex());
   refreshPlainScrollbarIfActive();
+}
+// 詳細画面を開いたまま曲を削除したとき、表示中の一覧からも消す
+function refreshGroupDetailAfterDelete() {
+  if (!document.getElementById('view-group-detail').classList.contains('active')) return;
+  if (lastGroupListView === 'view-genres' && genreCtx) {
+    const alive = new Set(tracks.map(t => t.id));
+    genreCtx.tracks = genreCtx.tracks.filter(t => alive.has(t.id));
+    if (genreCtx.album === null) { renderGenreAlbumList(genreCtx.genre, genreCtx.tracks); return; }
+  }
+  const listEl = document.getElementById('group-detail-list');
+  if (listEl._lastList) renderGroupDetailList(listEl._lastList);
 }
 
 // ジャンル詳細画面専用: ジャンル → アルバム一覧 → 曲 の3段階。先頭の「すべての曲」でジャンル内の全曲を連続再生できる
@@ -1961,7 +1976,7 @@ function toExportFile(track) {
 async function bulkExportSelected() {
   const ids = [...selectedIds];
   if (ids.length === 0) return;
-  if (ids.length > 30 && !dialogConfirm(`${ids.length}曲を書き出します。曲数が多いと共有に失敗しやすくなります。続けますか?`)) return;
+  // ここで確認ダイアログを出すと、iOSではタップ直後の扱いが切れて共有シートを開けなくなるので出さない(共有シートが確認を兼ねる)
   const selected = ids.map(id => tracks.find(t => t.id === id)).filter(Boolean);
   showToast('書き出す準備をしています…', 15000);
   let files;
@@ -1973,15 +1988,17 @@ async function bulkExportSelected() {
     return;
   }
   hideToast();
-  try {
-    if (navigator.canShare && navigator.canShare({ files })) {
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try {
       await navigator.share({ files, title: `${files.length}曲` });
       exitSelectMode();
-      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return; // 共有シートを閉じただけ
+      // iPhoneで1曲ずつダウンロードに切り替えると大量の確認が出て扱いにくいので、ここで止めて知らせる
+      console.error('共有に失敗:', err);
+      dialogAlert(`書き出しに失敗しました(${err && err.message ? err.message : err})。曲数を減らして試してください`);
     }
-  } catch (err) {
-    if (err && err.name === 'AbortError') return; // 共有シートを閉じただけ
-    console.error('共有に失敗。ダウンロードに切り替えます:', err);
+    return;
   }
   // 共有シートが使えない環境では、1曲ずつダウンロードする
   for (const f of files) {
@@ -2234,6 +2251,7 @@ async function deleteTracksFromLibrary(trackIds) {
   renderTrackList(document.getElementById('search-input').value.trim());
   renderPlaylistList();
   if (isPlaylistDetailActive()) openPlaylistDetail(currentPlaylistId, playlistDetailBackView); // 開いているプレイリストの中から削除したときも、閉じ直さず即座に消す
+  refreshGroupDetailAfterDelete();
   return true;
 }
 
@@ -3799,6 +3817,34 @@ function bindAudioEvents() {
     applyPendingReloadIfIdle();
   });
   onAudio('seeked', () => { clearJointStartTimer(); highlightCurrentLyricLine(); });
+  // 再生できない曲(壊れたファイル・この端末が対応していない形式)で、再生待ちが止まったままにならないようにする。
+  // 一時的な読み込みの失敗もあるので、同じ曲では1回だけ読み直し、それでもだめなら次の曲へ
+  let errorRetriedTrackId = null;
+  let consecutiveErrorSkips = 0;
+  onAudio('playing', () => { consecutiveErrorSkips = 0; });
+  onAudio('error', () => {
+    if (!currentTrack || !wantsToPlay) return;
+    const track = currentTrack;
+    console.error('再生エラー:', track.title, audioEl.error && audioEl.error.code);
+    if (errorRetriedTrackId !== track.id) {
+      errorRetriedTrackId = track.id;
+      const pos = audioEl.currentTime || 0;
+      setSource(audioEl, track);
+      audioEl.currentTime = pos;
+      audioEl.play().catch(() => {});
+      return;
+    }
+    errorRetriedTrackId = null;
+    consecutiveErrorSkips++;
+    if (consecutiveErrorSkips >= Math.min(5, Math.max(1, currentQueue.length))) {
+      wantsToPlay = false;
+      consecutiveErrorSkips = 0;
+      showToast('再生できない曲が続いたため、再生を止めました', 3000);
+      return;
+    }
+    showToast(`「${track.title}」を再生できないため、次の曲へ進みます`, 3000);
+    playNext();
+  });
   onAudio('ended', () => {
     if (sleepTimerEndOfTrack) {
       sleepTimerEndOfTrack = false;
