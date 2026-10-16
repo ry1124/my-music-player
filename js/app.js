@@ -2520,7 +2520,7 @@ const SEASON_NOISE_RE = /青春|思春期|上海|深海|海馬|海賊|樹海|航
 // 曲名に季節の言葉が無いが、季節の歌としてよく知られている曲(曲名, 季節, アーティスト名の一部(同名の曲が多いもの))
 // 'none' = 曲名に季節の言葉があるが、季節の歌ではない曲
 const KNOWN_SEASON_SONGS = [
-  ['YELL', 'spring', 'いきものがかり'], ['道', 'spring', 'EXILE'], ['さよならメモリーズ', 'spring', 'supercell'], ['ロビンソン', 'spring', 'スピッツ'],
+  ['YELL', 'spring', 'いきものがかり'], ['道', 'spring', 'EXILE'], ['さよならメモリーズ', 'spring', 'supercell'],
   ['secret base', 'summer'], ['若者のすべて', 'summer'], ['HOT LIMIT', 'summer'], ['HOTEL PACIFIC', 'summer'], ['TSUNAMI', 'summer', 'サザン'],
   ['勝手にシンドバッド', 'summer'], ['イケナイ太陽', 'summer'], ['ロコローション', 'summer'], ['上海ハニー', 'summer'], ['睡蓮花', 'summer'],
   ['少年時代', 'summer', '井上陽水'], ['楽園ベイベー', 'summer'], ['熱帯夜', 'summer', 'RIP SLYME'], ['渚', 'summer', 'スピッツ'], ['シーズン・イン・ザ・サン', 'summer'],
@@ -2531,7 +2531,9 @@ const KNOWN_SEASON_SONGS = [
 const seasonSongKey = (s) => String(s || '').normalize('NFKC').toLowerCase().replace(/[\s・\-～〜~!?、。,.'"’]/g, '');
 function knownSeason(track) {
   const t = seasonSongKey(track.title), a = seasonSongKey(track.artist);
-  const hit = KNOWN_SEASON_SONGS.find(([title, , artist]) => {
+  // 歌詞の内容を読んで決めた一覧(season-songs.js)を先に見る。無い曲は、よく知られた季節の歌の一覧
+  const lists = (typeof LYRIC_SEASON_SONGS !== 'undefined' ? LYRIC_SEASON_SONGS : []).concat(KNOWN_SEASON_SONGS);
+  const hit = lists.find(([title, , artist]) => {
     const k = seasonSongKey(title);
     // 「secret base～君がくれたもの～」のように副題が付いていても合うように、長めの曲名は前方一致でも認める
     const titleOk = t === k || (k.length >= 6 && t.startsWith(k));

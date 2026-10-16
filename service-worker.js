@@ -11,6 +11,7 @@ const CORE_ASSETS = [
   './js/settings.js',
   './js/audio-engine.js',
   './js/tags-fast.js',
+  './js/season-songs.js',
   './js/app.js',
   './js/backup.js',
   './icons/icon-192.png',
