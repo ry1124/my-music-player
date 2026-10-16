@@ -73,6 +73,7 @@ function setupIcons() {
   set('btn-queue', 'tabGenres', 24);
   set('btn-sleep-timer', 'moon', 20);
   set('btn-lyrics-expand', 'expand', 16);
+  set('mini-prev', 'prev', 28);
   set('mini-playpause', 'play', 28);
   set('mini-next', 'next', 28);
   // タブバー・上部ボタンも単色アイコンにする(白い画面でカラー絵文字が浮かないように)
@@ -373,6 +374,7 @@ function bindUIEvents() {
     openNowPlaying();
   });
   document.getElementById('mini-playpause').addEventListener('click', (e) => { e.stopPropagation(); togglePlayPause(); });
+  document.getElementById('mini-prev').addEventListener('click', (e) => { e.stopPropagation(); playPrev(); });
   document.getElementById('mini-next').addEventListener('click', (e) => { e.stopPropagation(); playNext(); });
 
   // Now Playing
