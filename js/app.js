@@ -2495,13 +2495,48 @@ const ERA_LISTS = [
 //  ・並び順 = seasonOrders(季節ごとの曲idの並び)に保存。並びが未保存の曲は、曲名順で後ろに続く
 //  ・名前 = seasonLabels に保存
 // 曲名・アルバム名の言葉から自動で振り分ける。手動で決めた季節(track.season)があればそちらを優先する。'none' = どれでもない
+// re = 曲名で使う言葉 / lyricRe = 歌詞で使う言葉(歌詞には「海」「祭」などが季節と関係なくよく出てくるので、はっきり季節を表す言葉だけ)
+// 「〇月」は、前が数字のとき(「13月」「11月」の「1月」など)は数えない
 const SEASONS = [
-  { key: 'spring', label: '春の曲', re: /春|桜|さくら|サクラ|卒業|入学|花見|菜の花|新生活|桃の花|spring|sakura|cherry\s?blossom/gi },
-  { key: 'summer', label: '夏の曲', re: /夏|花火|向日葵|ひまわり|入道雲|夕立|浴衣|蝉|海|サマー|summer|真夏|南国|プール|夏祭/gi },
-  { key: 'autumn', label: '秋の曲', re: /秋|紅葉|コスモス|落ち葉|枯葉|月見|十五夜|銀杏|autumn|fall\b|ハロウィン|halloween/gi },
-  { key: 'winter', label: '冬の曲', re: /冬|雪|winter|snow|粉雪|吹雪|白い息|こたつ/gi },
-  { key: 'xmas', label: 'クリスマス', re: /クリスマス|christmas|x'?mas|聖夜|サンタ|ジングルベル|ノエル|きよしこの夜|もろびと|トナカイ|ルドルフ|noel|santa|jingle\s?bells?|silent\s?night|holy\s?night|rudolph|reindeer|sleigh|mistletoe|carols?|deck\s?the\s?halls?|joy\s?to\s?the\s?world|let\s?it\s?snow|winter\s?wonderland|little\s?drummer|first\s?noel|angels\s?we\s?have|hark\s?the|away\s?in\s?a\s?manger|feliz\s?navidad|all\s?i\s?want\s?for|bells?\s?rock|nutcracker|くるみ割り/gi }, // 冬とは別の一覧(クリスマスの曲は冬に入れない)
+  { key: 'spring', label: '春の曲',
+    re: /春|桜|さくら|サクラ|卒業|入学|花見|菜の花|新生活|桃の花|チェリー|ハナミズキ|旅立ち|ハル(?!カ|ジオン|ヒ)|(?:^|[^0-9十])[34三四]月|spring|sakura|cherry\s?blossom|graduation/gi,
+    lyricRe: /春|桜|卒業|花見|菜の花|spring|cherry\s?blossom/gi },
+  { key: 'summer', label: '夏の曲',
+    re: /夏|花火|hanabi|向日葵|ひまわり|入道雲|夕立|浴衣|蝉|海|サマー|summer|南国|プール|祭|七夕|風鈴|かき氷|波乗り|サーフ|surf|ビーチ|beach|(?:^|[^0-9十])[78七八]月|july|august/gi,
+    lyricRe: /夏|花火|向日葵|ひまわり|入道雲|夕立|浴衣|蝉|風鈴|かき氷|summer/gi },
+  { key: 'autumn', label: '秋の曲',
+    re: /秋|紅葉|もみじ|コスモス|落ち葉|枯葉|月見|十五夜|銀杏|金木犀|キンモクセイ|赤とんぼ|すすき|(?:^|[^0-9十])(?:9|10|11|九|十|十一)月|autumn|september|october|november|セプテンバー|ハロウィン|halloween|fallen\s?leaves/gi,
+    lyricRe: /秋|紅葉|もみじ|落ち葉|枯葉|金木犀|キンモクセイ|すすき|赤とんぼ|月見|autumn/gi },
+  { key: 'winter', label: '冬の曲',
+    re: /冬|雪|スノー|snow|winter|ウィンター|白い息|white\s?breath|白い恋人|こたつ|ゲレンデ|スキー|バレンタイン|valentine|正月|(?:^|[^0-9十])(?:12|1|2|十二|一|二)月|december|january|february/gi,
+    lyricRe: /冬|雪|白い息|こたつ|winter|snow/gi },
+  { key: 'xmas', label: 'クリスマス', re: /クリスマス|christmas|x'?mas|聖夜|サンタ|ジングルベル|ノエル|きよしこの夜|もろびと|トナカイ|ルドルフ|メリクリ|サイレント・?イ[ヴブ]|noel|santa|jingle\s?bells?|silent\s?night|holy\s?night|rudolph|reindeer|sleigh|mistletoe|carols?|deck\s?the\s?halls?|joy\s?to\s?the\s?world|let\s?it\s?snow|winter\s?wonderland|little\s?drummer|first\s?noel|angels\s?we\s?have|hark\s?the|away\s?in\s?a\s?manger|feliz\s?navidad|all\s?i\s?want\s?for|bells?\s?rock|nutcracker|くるみ割り/gi,
+    lyricRe: /クリスマス|christmas|聖夜|サンタ|トナカイ|ジングルベル|santa|jingle\s?bells?|mistletoe/gi }, // 冬とは別の一覧(クリスマスの曲は冬に入れない)
 ];
+// 季節の言葉を含むが、季節とは関係のない言葉(人名・地名・作品名など)。判定の前に取り除く
+const SEASON_NOISE_RE = /青春|思春期|上海|深海|海馬|海賊|樹海|航海|海外|天海|海未|雪月花|雪ノ下|雪乃|雪歩|ウルトラマンコスモス|さくらんぼ|サクランボ|桜木|桜井|桜庭|夏目|秋葉|春香|ウイスキー|ウィスキー|文化祭|学園祭|後夜祭|mighty\s?long\s?fall/gi;
+// 曲名に季節の言葉が無いが、季節の歌としてよく知られている曲(曲名, 季節, アーティスト名の一部(同名の曲が多いもの))
+// 'none' = 曲名に季節の言葉があるが、季節の歌ではない曲
+const KNOWN_SEASON_SONGS = [
+  ['YELL', 'spring', 'いきものがかり'], ['道', 'spring', 'EXILE'], ['さよならメモリーズ', 'spring', 'supercell'], ['ロビンソン', 'spring', 'スピッツ'],
+  ['secret base', 'summer'], ['若者のすべて', 'summer'], ['HOT LIMIT', 'summer'], ['HOTEL PACIFIC', 'summer'], ['TSUNAMI', 'summer', 'サザン'],
+  ['勝手にシンドバッド', 'summer'], ['イケナイ太陽', 'summer'], ['ロコローション', 'summer'], ['上海ハニー', 'summer'], ['睡蓮花', 'summer'],
+  ['少年時代', 'summer', '井上陽水'], ['楽園ベイベー', 'summer'], ['熱帯夜', 'summer', 'RIP SLYME'], ['渚', 'summer', 'スピッツ'], ['シーズン・イン・ザ・サン', 'summer'],
+  ['ヒロイン', 'winter', 'back number'], ['ロマンスの神様', 'winter'], ['Choo Choo TRAIN', 'winter'], ['White Love', 'winter', 'SPEED'],
+  ['ゲレンデがとけるほど恋したい', 'winter'],
+  ['吹雪', 'none', '西沢幸奏'], // 艦これの主題歌(船・登場人物の名前で、冬の歌ではない)
+];
+const seasonSongKey = (s) => String(s || '').normalize('NFKC').toLowerCase().replace(/[\s・\-～〜~!?、。,.'"’]/g, '');
+function knownSeason(track) {
+  const t = seasonSongKey(track.title), a = seasonSongKey(track.artist);
+  const hit = KNOWN_SEASON_SONGS.find(([title, , artist]) => {
+    const k = seasonSongKey(title);
+    // 「secret base～君がくれたもの～」のように副題が付いていても合うように、長めの曲名は前方一致でも認める
+    const titleOk = t === k || (k.length >= 6 && t.startsWith(k));
+    return titleOk && (!artist || a.includes(seasonSongKey(artist)));
+  });
+  return hit ? hit[1] : '';
+}
 const seasonDefByListId = (id) => (typeof id === 'string' ? SEASONS.find(d => 'season:' + d.key === id) : undefined);
 const isEditableListId = (id) => typeof id === 'number' || !!seasonDefByListId(id);
 // 自動で決まる一覧(お気に入り・最近追加した曲など・季節)は、どれも同じしくみで名前を変えられる。名前は listLabels に、一覧のキーごとに保存する
@@ -2554,17 +2589,24 @@ function countMatches(text, re) {
   const m = text.match(re);
   return m ? m.length : 0;
 }
+// 「秋桜(コスモス)」は春の「桜」に数えない。季節と関係のない言葉(青春・上海・人名など)は取り除く
+const cleanSeasonText = (s) => String(s || '').normalize('NFKC').replace(/秋桜/g, '秋').replace(SEASON_NOISE_RE, ' ');
 function autoSeason(track) {
-  // 「秋桜(コスモス)」は春の「桜」に数えない。「青春」は季節の「春」ではないので数えない
-  const head = `${track.title || ''} ${track.album || ''}`.normalize('NFKC').replace(/秋桜/g, '秋').replace(/青春/g, '');
-  const scoreOf = (text) => SEASONS.map(d => ({ key: d.key, n: countMatches(text, d.re) })).sort((a, b) => b.n - a.n);
-  let sc = scoreOf(head);
+  const known = knownSeason(track);
+  if (known) return known === 'none' ? '' : known;
+  // アルバム名は、アニメ・映画の作品名(「名探偵コナン ハロウィンの花嫁」など)が入っていることが多く、
+  // 曲の季節とは関係ないので使わない。ただしクリスマスのアルバムの曲はクリスマスにする
+  if (countMatches(cleanSeasonText(track.album), SEASONS.find(d => d.key === 'xmas').re) > 0) return 'xmas';
+  const scoreOf = (text, field) => SEASONS.map(d => ({ key: d.key, n: countMatches(text, d[field]) })).sort((a, b) => b.n - a.n);
+  let sc = scoreOf(cleanSeasonText(track.title), 're');
   const xm = sc.find(x => x.key === 'xmas');
   if (xm.n > 0) return 'xmas'; // 曲名にクリスマスの言葉があれば、他の季節の言葉(「冬」など)が入っていてもクリスマス
   if (sc[0].n > 0 && sc[0].n > sc[1].n) return sc[0].key;
   // 曲名で決まらないときは、歌詞に出てくる季節の言葉が多く、はっきり差がある場合だけ採用する
   if (sc[0].n === 0 && track.lyrics) {
-    sc = scoreOf(track.lyrics.normalize('NFKC').replace(/秋桜/g, '秋').replace(/青春/g, ''));
+    sc = scoreOf(cleanSeasonText(track.lyrics), 'lyricRe');
+    const xmL = sc.find(x => x.key === 'xmas');
+    if (xmL.n >= 2) return 'xmas'; // クリスマスの歌は「雪」も多く出てくるので、先に見る
     if (sc[0].n >= 3 && sc[0].n >= sc[1].n * 2) return sc[0].key;
   }
   return '';
