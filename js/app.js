@@ -3111,12 +3111,28 @@ function loadAndPlay(track, index, opts = {}) {
       jointBusy = false;
     };
     jointEndTimer = setTimeout(finishJoint, (fadeSec + 0.2) * 1000);
+    // 画面ロック中は、音が途切れるとタイマーが止まることがあるので、前の曲が終わった時点でも確かめる
+    oldEl.addEventListener('ended', () => {
+      if (jointEndTimer === null || audioEl !== el) return;
+      clearTimeout(jointEndTimer);
+      waitedOnce = true;
+      finishJoint();
+    }, { once: true });
   } else {
     setVolumeImmediate(el, 1);
   }
   const started = el.play();
   if (opts.joint && started && started.catch) started.catch(() => abortJoint(el, prev));
-  else if (started && started.catch) started.catch(() => {});
+  else if (started && started.then) {
+    // 画面ロック中に次の曲へ移るとき、iPhoneが再生を断ったり、「再生中」なのに進まなかったりすることがある。
+    // そのまま放っておくと再生が止まってしまうので、読み込み元を作り直して何回か再試行する
+    started.then(() => {
+      if (currentTrack === track && audioEl === el) verifyProgressing(track, el, el.currentTime, 4);
+    }).catch((err) => {
+      if (err && err.name === 'AbortError') return; // 別の曲に切り替えた・止めた
+      if (currentTrack === track && audioEl === el && wantsToPlay) attemptResume(4, true);
+    });
+  }
   updateNowPlayingUI();
   if (opts.joint && isFinite(el.duration)) document.getElementById('np-duration').textContent = formatTime(el.duration);
   updateMediaSession();
@@ -3186,8 +3202,9 @@ function attemptResume(tries = 5, hard = false) {
 function verifyProgressing(track, el, startTime, tries) {
   if (tries <= 1) return; // やり尽くした
   setTimeout(() => {
-    if (currentTrack !== track || audioEl !== el || !wantsToPlay || el.paused) return; // 状況が変わっていれば何もしない
-    if (el.currentTime - startTime > 0.1) return; // ちゃんと進んでいる
+    if (currentTrack !== track || audioEl !== el || !wantsToPlay) return; // 状況が変わっていれば何もしない
+    // ちゃんと進んでいる。(「再生した」と返ってきたのに止まったまま(paused)のときも、自分で止めていなければやり直す)
+    if (!el.paused && el.currentTime - startTime > 0.1) return;
     const savedTime = el.currentTime;
     setSource(el, track); // blobのURLを作り直す(古い参照が無効になっている場合の対策)
     el.currentTime = savedTime;
@@ -3245,8 +3262,12 @@ function renderNormalizedForTrack(track) {
   return pr;
 }
 // 再生を始めるとき・設定を変えたときに呼ぶ。今の再生には間に合わなくても、次に鳴らすときのために作っておく
+// 画面ロック中・裏に回っている間は、重い処理(曲全体の読み込みと加工)をしない。
+// iPhoneは、裏で負荷やメモリを使いすぎたアプリを強制的に終了させることがあり、再生ごと止まってしまうため
+const normalizeDeferred = new Set();
 function ensureNormalized(track) {
   if (!Settings.get('soundCheck')) return;
+  if (document.visibilityState !== 'visible') { normalizeDeferred.add(track); return; }
   if (typeof track.gainDb !== 'number') { analyzeTrackLoudness(track).then(() => ensureNormalized(track)); return; }
   if (track.normGainDb === track.gainDb) return;
   renderNormalizedForTrack(track);
@@ -3380,6 +3401,9 @@ function startJoint(fadeSec) {
 function checkJoint() {
   const mode = Settings.get('joint');
   if (mode === 'off' || jointDisabled || jointPausedUntilVisible || jointBusy || audioEl.paused || repeatMode === 'one') return;
+  // 画面ロック中・裏に回っている間は、2つめの要素での重ねをしない(iPhoneが2つめの再生を断る/無音になることがあり、
+  // 再生が止まる原因になる)。その間は1つの要素で、通常どおり次の曲へ切り替える
+  if (document.visibilityState !== 'visible') return;
   const d = audioEl.duration;
   if (!d || !isFinite(d)) return;
   const remaining = d - audioEl.currentTime;
@@ -4032,6 +4056,9 @@ async function openSleepTimerSheet() {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { savePlaybackState(true); return; }
   jointPausedUntilVisible = false;
+  const deferred = [...normalizeDeferred];
+  normalizeDeferred.clear();
+  deferred.forEach(ensureNormalized);
   attemptResume(5, true); // 電話などで強制的に止められて、画面に戻ってきたときは、自動で再開する
   autoCheckUpdateSilently(); // ホーム画面から復帰したときにも、新しいバージョンがないか裏で確認する
 });
