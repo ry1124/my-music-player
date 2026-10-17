@@ -4117,6 +4117,7 @@ window.addEventListener('focus', () => attemptResume(5, true)); // 電話の終�
 
 // 音の出力先(イヤホン・Bluetoothなど)が変わった時刻
 let lastOutputChangeAt = 0;
+let bgResumeTimer = null; // 裏で止められたときの、再開の予約
 if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
   navigator.mediaDevices.addEventListener('devicechange', () => { lastOutputChangeAt = Date.now(); });
 }
@@ -4136,6 +4137,13 @@ function bindAudioEvents() {
     // (電話などの割り込みと同じ扱いのままだと、アプリに戻ったときにスピーカーから勝手に再生が始まってしまう)
     if (Date.now() - lastOutputChangeAt < 2000) wantsToPlay = false;
     clearJointStartTimer(); savePlaybackState(true); setPlayPauseIcon(false);
+    // 裏で聴いている最中に、自分で止めていないのに止まったとき(ほかのアプリ(勉強アプリなど)が音を使い終わって
+    // 閉じられたときなど、iPhoneが一瞬だけ音を取り上げることがある)は、アプリに戻るのを待たずに再開を試みる。
+    // ほかのアプリが音を鳴らし続けている間は、iPhoneが裏からの再生を断るので、そちらの音を邪魔することはない
+    if (document.visibilityState !== 'visible' && wantsToPlay && !audioEl.ended) {
+      clearTimeout(bgResumeTimer);
+      bgResumeTimer = setTimeout(() => { bgResumeTimer = null; attemptResume(5, false); }, 800);
+    }
     if (lyricRaf !== null) { cancelAnimationFrame(lyricRaf); lyricRaf = null; }
     // 曲の終わり(次の曲へ移る直前)や電話・通知でもpauseは起きるので、自分で止めたときだけ更新する
     applyPendingReloadIfIdle();
