@@ -38,6 +38,24 @@ if ('audioSession' in navigator) {
   try { navigator.audioSession.type = 'playback'; } catch (e) { /* 対応していない端末では無視 */ }
 }
 
+// ---- 再生の記録(診断用) ----
+// iPhoneでしか起きない再生の止まり方を調べるため、再生に関わる出来事を端末に最大200件まで残す(設定 → 診断情報で見られる)
+const PB_LOG_KEY = 'playbackLog';
+function pbLog(msg) {
+  try {
+    const arr = JSON.parse(localStorage.getItem(PB_LOG_KEY) || '[]');
+    const d = new Date();
+    const p2 = (n) => String(n).padStart(2, '0');
+    const el = typeof audioEl !== 'undefined' ? audioEl : null;
+    const st = el ? ` ${el === audioA ? 'A' : 'B'}${el.paused ? '停' : '再'}${(el.currentTime || 0).toFixed(1)}` : '';
+    const sess = 'audioSession' in navigator ? ` 音:${navigator.audioSession.state}` : '';
+    arr.push(`${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())} ${msg} [${document.visibilityState === 'visible' ? '表' : '裏'}${st}${sess}]`);
+    while (arr.length > 200) arr.shift();
+    localStorage.setItem(PB_LOG_KEY, JSON.stringify(arr));
+  } catch (e) { /* 記録できなくても、再生には影響しない */ }
+}
+pbLog('起動');
+
 // ===== アイコン(単色SVG。currentColor で色を変える) =====
 const svgIcon = (path, size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" aria-hidden="true">${path}</svg>`;
 const ICON_PATHS = {
@@ -3124,6 +3142,7 @@ function setSource(el, track) {
 // index を渡すと、再生待ちの中のその位置として扱う(同じ曲が2つあっても取り違えない)
 // opts.joint: 曲の重ね。opts.el の要素で新しい曲を始め、今の曲を opts.fadeSec 秒かけて消す
 function loadAndPlay(track, index, opts = {}) {
+  pbLog(`曲を開始「${track.title}」${opts.joint ? '(重ね)' : ''}`);
   const prev = { track: currentTrack, index: currentIndex };
   currentTrack = track;
   playCounted = false;
@@ -3238,11 +3257,14 @@ function attemptResume(tries = 5, hard = false) {
   // 曲の重ね(クロスフェード)の途中で一時停止すると、音量が下がった/上がりきっていない途中の値のまま
   // 止まることがある。そのまま再開すると「再生はされるが音がほぼ聞こえない」状態になるため、必ず戻す
   if (!jointBusy) setVolumeImmediate(el, 1);
+  pbLog(`再開を試す(残り${tries}回${hard ? '・読み直し' : ''})`);
   el.play().then(() => {
+    pbLog('再開OK');
     resumeRetryTimer = null;
     if (!wantsToPlay) { el.pause(); return; } // 再開できた頃には、やっぱり止めたくなっていた場合
     verifyProgressing(track, el, el.currentTime, tries);
-  }).catch(() => {
+  }).catch((err) => {
+    pbLog(`再開NG ${err && err.name}`);
     if (tries > 1) resumeRetryTimer = setTimeout(() => attemptResume(tries - 1, true), 500);
   });
 }
@@ -3481,9 +3503,11 @@ function refreshPlayingHighlight() {
 function togglePlayPause() {
   if (!currentTrack) return;
   if (audioEl.paused) {
+    pbLog('アプリの▶');
     wantsToPlay = true;
     attemptResume();
   } else {
+    pbLog('アプリの‖');
     wantsToPlay = false;
     cancelJoint(); // 曲の重ね(クロスフェード)の途中で止めても、消えていく方を含めてきちんと止める
     setVolumeImmediate(audioEl, 1); // フェードの途中の音量のまま、次に再開しないように
@@ -3604,6 +3628,11 @@ async function mergeDuplicates() {
 async function showDiagnostics() {
   const out = [];
   out.push(`バージョン: ${APP_VERSION}`);
+  out.push('--- 再生の記録(新しい順) ---');
+  out.push('  [表/裏 = 画面に出ているか, A/B = 鳴らしている部分, 停/再 = 止まっているか, 数字 = 曲の何秒目か, 音: = 音の使用権]');
+  let pb = [];
+  try { pb = JSON.parse(localStorage.getItem(PB_LOG_KEY) || '[]'); } catch (e) { /* 無視 */ }
+  pb.slice().reverse().forEach(line => out.push('  ' + line));
   out.push(`曲: ${tracks.length}曲 / プレイリスト: ${playlists.length}件`);
   const pl = await DB.getAllPlaylists();
   out.push('--- プレイリスト(保存されているもの) ---');
@@ -4104,6 +4133,7 @@ async function openSleepTimerSheet() {
 
 // アプリが裏に回る/閉じられる直前にも保存する
 document.addEventListener('visibilitychange', () => {
+  pbLog(document.visibilityState === 'hidden' ? '裏に回った' : '表に戻った');
   if (document.visibilityState === 'hidden') { savePlaybackState(true); return; }
   jointPausedUntilVisible = false;
   const deferred = [...normalizeDeferred];
@@ -4112,12 +4142,22 @@ document.addEventListener('visibilitychange', () => {
   attemptResume(5, true); // 電話などで強制的に止められて、画面に戻ってきたときは、自動で再開する
   autoCheckUpdateSilently(); // ホーム画面から復帰したときにも、新しいバージョンがないか裏で確認する
 });
-window.addEventListener('pagehide', () => savePlaybackState(true));
-window.addEventListener('focus', () => attemptResume(5, true)); // 電話の終了直後など、visibilitychangeが起きない場合の保険
+window.addEventListener('pagehide', () => { pbLog('pagehide'); savePlaybackState(true); });
+window.addEventListener('pageshow', (e) => pbLog(`pageshow${e.persisted ? '(復元)' : ''}`));
+window.addEventListener('blur', () => pbLog('blur'));
+window.addEventListener('focus', () => { pbLog('focus'); attemptResume(5, true); }); // 電話の終了直後など、visibilitychangeが起きない場合の保険
 
 // 音の出力先(イヤホン・Bluetoothなど)が変わった時刻
 let lastOutputChangeAt = 0;
 let bgResumeTimer = null; // 裏で止められたときの、再開の予約
+// iOS 17以降: 音の使用権(音声セッション)が取り上げられた/戻ったことが分かる。戻ったとき(interrupted 以外になったとき)に
+// 止まったままなら、その場で再開する(タイマーと違い、裏に回っていても届く出来事なので、こちらの方が確実)
+if ('audioSession' in navigator && navigator.audioSession.addEventListener) {
+  navigator.audioSession.addEventListener('statechange', () => {
+    pbLog('音声セッション変化');
+    if (navigator.audioSession.state !== 'interrupted' && wantsToPlay && currentTrack && audioEl.paused && !audioEl.ended) attemptResume(5, true);
+  });
+}
 // 自分で止めていないのに止まった(割り込み・ほかのアプリを閉じた・音声の処理が落ちた など)ときの見張り。
 // 止まってから1分間は、2秒ごとに「止まったままか」を確かめて再開を試みる
 // (アプリの切り替え画面からほかのアプリを消したときなど、上の1回きりの予約だけでは再開できないことがあるため)
@@ -4136,12 +4176,18 @@ function noteUnexpectedStop() {
   }, 2000);
 }
 if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
-  navigator.mediaDevices.addEventListener('devicechange', () => { lastOutputChangeAt = Date.now(); });
+  navigator.mediaDevices.addEventListener('devicechange', () => { lastOutputChangeAt = Date.now(); pbLog('出力先が変わった'); });
 }
 
 function bindAudioEvents() {
   // 2つのaudio要素の両方に付けて、今、曲を鳴らしている方のイベントだけ処理する
   const onAudio = (name, fn) => [audioA, audioB].forEach(el => el.addEventListener(name, (e) => { if (el === audioEl) fn(e); }));
+  // 診断用の記録(両方の要素)
+  ['play', 'playing', 'pause', 'ended', 'error', 'stalled', 'waiting', 'emptied', 'abort'].forEach((name) => {
+    [audioA, audioB].forEach(el => el.addEventListener(name, () => {
+      pbLog(`${el === audioA ? 'A' : 'B'}:${name}${name === 'error' && el.error ? '(' + el.error.code + ')' : ''}${el === audioEl ? '' : '(控え)'}`);
+    }));
+  });
   // 歌詞の切り替えは、再生中だけ毎フレーム確認する(timeupdateは約0.25秒に1回なので、それだけだと歌詞が遅れて見える)
   let lyricRaf = null;
   const lyricLoop = () => {
@@ -4420,8 +4466,8 @@ function updateMediaSession() {
     album: currentTrack.album || '',
     artwork,
   });
-  navigator.mediaSession.setActionHandler('play', () => { wantsToPlay = true; attemptResume(5, true); });
-  navigator.mediaSession.setActionHandler('pause', () => { wantsToPlay = false; audioEl.pause(); });
+  navigator.mediaSession.setActionHandler('play', () => { pbLog('ロック画面などの▶'); wantsToPlay = true; attemptResume(5, true); });
+  navigator.mediaSession.setActionHandler('pause', () => { pbLog('ロック画面などの‖'); wantsToPlay = false; audioEl.pause(); });
   navigator.mediaSession.setActionHandler('previoustrack', playPrev);
   navigator.mediaSession.setActionHandler('nexttrack', playNext);
   // 「シーク(ドラッグして頭出し)」を登録すると、iOSが前へ/次へボタンの代わりにシークのボタンを
