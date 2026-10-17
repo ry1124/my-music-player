@@ -23,8 +23,12 @@ const thumbUrlCache = new Map();   // trackId -> objectURL(サムネイル)
 // audio要素は2つ持つ(クロスフェード/ギャップレスのとき、次の曲を、もう一方で先に鳴らし始める)。audioEl は「今の曲を鳴らしている方」
 const audioA = document.getElementById('audio-el');
 const audioB = new Audio();
+audioB.id = 'audio-el-2';
 audioB.preload = 'auto';
 audioB.setAttribute('playsinline', '');
+// 2つめもページの中に置く。ページに置いていない音声は、別のアプリに切り替えた(裏に回った)ときに
+// iPhoneに止められることがあり、クロスフェードのあと(2つめで鳴っているとき)に再生が止まる原因になる
+audioA.after(audioB);
 let audioEl = audioA;
 const audioUrls = new Map(); // audio要素 → セット中のobject URL
 
@@ -4111,6 +4115,12 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', () => savePlaybackState(true));
 window.addEventListener('focus', () => attemptResume(5, true)); // 電話の終了直後など、visibilitychangeが起きない場合の保険
 
+// 音の出力先(イヤホン・Bluetoothなど)が変わった時刻
+let lastOutputChangeAt = 0;
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', () => { lastOutputChangeAt = Date.now(); });
+}
+
 function bindAudioEvents() {
   // 2つのaudio要素の両方に付けて、今、曲を鳴らしている方のイベントだけ処理する
   const onAudio = (name, fn) => [audioA, audioB].forEach(el => el.addEventListener(name, (e) => { if (el === audioEl) fn(e); }));
@@ -4122,6 +4132,9 @@ function bindAudioEvents() {
   };
   onAudio('play', () => { setPlayPauseIcon(true); if (lyricRaf === null) lyricRaf = requestAnimationFrame(lyricLoop); });
   onAudio('pause', () => {
+    // イヤホンを抜いた(出力先が変わった)ことによる停止は、自分で止めたのと同じ扱いにする
+    // (電話などの割り込みと同じ扱いのままだと、アプリに戻ったときにスピーカーから勝手に再生が始まってしまう)
+    if (Date.now() - lastOutputChangeAt < 2000) wantsToPlay = false;
     clearJointStartTimer(); savePlaybackState(true); setPlayPauseIcon(false);
     if (lyricRaf !== null) { cancelAnimationFrame(lyricRaf); lyricRaf = null; }
     // 曲の終わり(次の曲へ移る直前)や電話・通知でもpauseは起きるので、自分で止めたときだけ更新する
