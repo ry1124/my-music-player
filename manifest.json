@@ -2,7 +2,7 @@
   "name": "Myミュージック",
   "short_name": "Myミュージック",
   "description": "iPhone内の音楽ファイルを再生するプレイヤー",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",

@@ -38,14 +38,22 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// 置き場所によっては「index.html → /」のように転送(リダイレクト)されることがある。転送を経た応答を
+// そのまま画面の読み込みに返すと、iPhoneでは開けなくなる(エラーになる)ため、転送の印を外した応答に作り直す
+function cleanResponse(res) {
+  if (!res || !res.redirected) return Promise.resolve(res);
+  return res.blob().then((body) => new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers }));
+}
+
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   event.respondWith(
     caches.match(event.request).then((cached) => {
-      if (cached) return cached;
+      if (cached) return cleanResponse(cached);
       return fetch(event.request)
+        .then(cleanResponse)
         .then((res) => {
-          if (res && res.status === 200 && res.type === 'basic') {
+          if (res && res.status === 200 && (res.type === 'basic' || res.type === 'default')) {
             const clone = res.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
           }
