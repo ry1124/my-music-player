@@ -4118,6 +4118,23 @@ window.addEventListener('focus', () => attemptResume(5, true)); // 電話の終�
 // 音の出力先(イヤホン・Bluetoothなど)が変わった時刻
 let lastOutputChangeAt = 0;
 let bgResumeTimer = null; // 裏で止められたときの、再開の予約
+// 自分で止めていないのに止まった(割り込み・ほかのアプリを閉じた・音声の処理が落ちた など)ときの見張り。
+// 止まってから1分間は、2秒ごとに「止まったままか」を確かめて再開を試みる
+// (アプリの切り替え画面からほかのアプリを消したときなど、上の1回きりの予約だけでは再開できないことがあるため)
+let unexpectedStopAt = 0;
+let stopWatchTimer = null;
+function noteUnexpectedStop() {
+  unexpectedStopAt = Date.now();
+  if (stopWatchTimer) return;
+  stopWatchTimer = setInterval(() => {
+    const stillStopped = wantsToPlay && currentTrack && audioEl.paused && !audioEl.ended;
+    if (!stillStopped || Date.now() - unexpectedStopAt > 60000) {
+      clearInterval(stopWatchTimer); stopWatchTimer = null;
+      return;
+    }
+    if (!resumeRetryTimer) attemptResume(3, true);
+  }, 2000);
+}
 if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
   navigator.mediaDevices.addEventListener('devicechange', () => { lastOutputChangeAt = Date.now(); });
 }
@@ -4140,6 +4157,7 @@ function bindAudioEvents() {
     // 裏で聴いている最中に、自分で止めていないのに止まったとき(ほかのアプリ(勉強アプリなど)が音を使い終わって
     // 閉じられたときなど、iPhoneが一瞬だけ音を取り上げることがある)は、アプリに戻るのを待たずに再開を試みる。
     // ほかのアプリが音を鳴らし続けている間は、iPhoneが裏からの再生を断るので、そちらの音を邪魔することはない
+    if (wantsToPlay && !audioEl.ended) noteUnexpectedStop();
     if (document.visibilityState !== 'visible' && wantsToPlay && !audioEl.ended) {
       clearTimeout(bgResumeTimer);
       bgResumeTimer = setTimeout(() => { bgResumeTimer = null; attemptResume(5, false); }, 800);
@@ -4163,7 +4181,9 @@ function bindAudioEvents() {
       const pos = audioEl.currentTime || 0;
       setSource(audioEl, track);
       audioEl.currentTime = pos;
-      audioEl.play().catch(() => {});
+      // 裏に回っているときなどは、すぐには再生を受け付けないことがあるので、断られたら何回か試す
+      audioEl.play().catch(() => { if (currentTrack === track && wantsToPlay) attemptResume(5, true); });
+      noteUnexpectedStop();
       return;
     }
     errorRetriedTrackId = null;
