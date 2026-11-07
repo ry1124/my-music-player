@@ -3129,10 +3129,38 @@ function playbackBlob(track) {
   if (Settings.get('soundCheck') && track.normBlob && track.normGainDb === (track.gainDb || 0)) return track.normBlob;
   return track.fileBlob;
 }
+// 次の曲のファイルを、今の曲が鳴っている間に読み込んでおく(メモリ上に写しておく)。
+// 画面ロック中・裏に回っているときに、曲の切り替わりで保存場所からの読み込みが止まり(stalled)、
+// 画面に戻るまで再生が始まらないことがあったため。今の曲と次の曲の2曲分だけ持つ
+let prefetched = { trackId: null, blob: null };      // 次の曲
+let currentPrefetched = { trackId: null, blob: null }; // 今の曲(読み直しのときにも使う)
+function prefetchNextTrack() {
+  const ni = nextQueueIndex();
+  if (ni < 0) return;
+  const tr = tracks.find(t => t.id === currentQueue[ni]);
+  if (!tr || prefetched.trackId === tr.id || currentPrefetched.trackId === tr.id || (currentTrack && tr.id === currentTrack.id)) return;
+  const src = playbackBlob(tr);
+  if (!src) return;
+  prefetched = { trackId: tr.id, blob: null };
+  src.arrayBuffer().then((buf) => {
+    if (prefetched.trackId !== tr.id) return;
+    prefetched.blob = new Blob([buf], { type: src.type || tr.mimeType || 'audio/mpeg' });
+    pbLog(`次の曲を先読み「${tr.title}」`);
+  }).catch(() => { if (prefetched.trackId === tr.id) prefetched = { trackId: null, blob: null }; });
+}
+function sourceBlobFor(track) {
+  if (prefetched.trackId === track.id && prefetched.blob) {
+    currentPrefetched = prefetched;
+    prefetched = { trackId: null, blob: null };
+  }
+  if (currentPrefetched.trackId === track.id && currentPrefetched.blob) return currentPrefetched.blob;
+  return playbackBlob(track);
+}
+
 function setSource(el, track) {
   const old = audioUrls.get(el);
   if (old) URL.revokeObjectURL(old);
-  const url = URL.createObjectURL(playbackBlob(track));
+  const url = URL.createObjectURL(sourceBlobFor(track));
   audioUrls.set(el, url);
   el.src = url;
   el.playbackRate = playbackSpeed;
@@ -4218,6 +4246,21 @@ function bindAudioEvents() {
   let errorRetriedTrackId = null;
   let consecutiveErrorSkips = 0;
   onAudio('playing', () => { consecutiveErrorSkips = 0; });
+  // 読み込みが止まった(stalled)まま再生が始まらないとき(裏に回っている間の曲の切り替わりで起きた)は、その場で読み直す。
+  // タイマーは裏では止められることがあるが、この出来事は届くので、ここで直す。同じ曲では3回まで
+  let stallTrackId = null, stallRetries = 0;
+  onAudio('stalled', () => {
+    if (!wantsToPlay || !currentTrack || audioEl.readyState >= 3) return; // 再生に十分なデータがあれば問題ない
+    if (stallTrackId !== currentTrack.id) { stallTrackId = currentTrack.id; stallRetries = 0; }
+    if (stallRetries >= 3) return;
+    stallRetries++;
+    pbLog(`読み込みが止まったので読み直す(${stallRetries}回目)`);
+    const pos = audioEl.currentTime || 0;
+    const track = currentTrack;
+    setSource(audioEl, track);
+    if (pos > 0) audioEl.currentTime = pos;
+    audioEl.play().catch(() => { if (currentTrack === track && wantsToPlay) attemptResume(5, true); });
+  });
   onAudio('error', () => {
     if (!currentTrack || !wantsToPlay) return;
     const track = currentTrack;
@@ -4263,6 +4306,7 @@ function bindAudioEvents() {
   onAudio('timeupdate', () => {
     highlightCurrentLyricLine();
     checkJoint();
+    if (wantsToPlay && audioEl.duration - audioEl.currentTime < 30) prefetchNextTrack();
     savePlaybackState(false);
     // 30秒(短い曲は半分)聴いたら、1回再生したことにする → 「最近再生した曲」
     if (currentTrack && !playCounted && audioEl.duration && audioEl.currentTime >= Math.min(30, audioEl.duration / 2)) {
