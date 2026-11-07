@@ -70,16 +70,35 @@ function txDone(transaction) {
   });
 }
 
+// 書き込み中の数。アプリの更新(画面の読み込み直し)は、これが0のときだけ行う(書き込みの途中で読み込み直すと、変更が消えるため)
+let pendingDbWrites = 0;
+// 1つのストアへの書き込み。要求の成功だけでなく、トランザクションが確定するまで待つ(確定前にアプリが閉じられても消えにくくする)
+function writeStore(storeName, fn) {
+  pendingDbWrites++;
+  return openDB().then((db) => {
+    const t = db.transaction(storeName, 'readwrite');
+    const req = fn(t.objectStore(storeName));
+    return Promise.all([promisifyRequest(req), txDone(t)]).then(([v]) => v);
+  }).finally(() => { pendingDbWrites--; });
+}
+function trackWrite(promise) {
+  pendingDbWrites++;
+  return promise.finally(() => { pendingDbWrites--; });
+}
+
 const DB = {
+  hasPendingWrites() { return pendingDbWrites > 0; },
   // 曲を新規に追加する。音声ファイル本体(fileBlob/normBlob)は、曲情報とは別のストアに保存する
-  async addTrack(track) {
-    const { fileBlob, normBlob, ...meta } = track;
-    const db = await openDB();
-    const transaction = db.transaction(['tracks', 'audio'], 'readwrite');
-    const id = await promisifyRequest(transaction.objectStore('tracks').add(meta));
-    transaction.objectStore('audio').put({ fileBlob, normBlob: normBlob || null }, id);
-    await txDone(transaction);
-    return id;
+  addTrack(track) {
+    return trackWrite((async () => {
+      const { fileBlob, normBlob, ...meta } = track;
+      const db = await openDB();
+      const transaction = db.transaction(['tracks', 'audio'], 'readwrite');
+      const id = await promisifyRequest(transaction.objectStore('tracks').add(meta));
+      transaction.objectStore('audio').put({ fileBlob, normBlob: normBlob || null }, id);
+      await txDone(transaction);
+      return id;
+    })());
   },
   async getAllTracks() {
     const [metas, audioMap] = await Promise.all([
@@ -104,24 +123,24 @@ const DB = {
     if (!meta) return undefined;
     return { ...meta, fileBlob: audio ? audio.fileBlob : undefined, normBlob: audio ? (audio.normBlob || null) : null };
   },
-  async deleteTrack(id) {
-    const db = await openDB();
-    const transaction = db.transaction(['tracks', 'audio'], 'readwrite');
-    transaction.objectStore('tracks').delete(id);
-    transaction.objectStore('audio').delete(id);
-    return txDone(transaction);
+  deleteTrack(id) {
+    return trackWrite((async () => {
+      const db = await openDB();
+      const transaction = db.transaction(['tracks', 'audio'], 'readwrite');
+      transaction.objectStore('tracks').delete(id);
+      transaction.objectStore('audio').delete(id);
+      return txDone(transaction);
+    })());
   },
   // 曲情報(メタデータ)だけを書き直す。音声ファイル本体は触らない(お気に入り・歌詞・曲情報の編集などで毎回呼ばれるため、
   // 重い音声ファイルまで書き直すと、編集のたびに数MBの書き込みが走ってしまう)
-  async updateTrack(track) {
+  updateTrack(track) {
     const { fileBlob, normBlob, ...meta } = track;
-    const store = await tx('tracks', 'readwrite');
-    return promisifyRequest(store.put(meta));
+    return writeStore('tracks', store => store.put(meta));
   },
   // 音声ファイル本体(音量をそろえたファイルの作り直しなど)を更新するときだけ使う
-  async updateTrackAudio(id, { fileBlob, normBlob }) {
-    const store = await tx('audio', 'readwrite');
-    return promisifyRequest(store.put({ fileBlob, normBlob: normBlob || null }, id));
+  updateTrackAudio(id, { fileBlob, normBlob }) {
+    return writeStore('audio', store => store.put({ fileBlob, normBlob: normBlob || null }, id));
   },
   // ---- 一覧用サムネイル(曲データ本体とは別に保存する。曲データを書き換えずに済む) ----
   async getAllThumbs() {
@@ -129,17 +148,14 @@ const DB = {
     const [keys, values] = await Promise.all([promisifyRequest(store.getAllKeys()), promisifyRequest(store.getAll())]);
     return new Map(keys.map((k, i) => [k, values[i]]));
   },
-  async putThumb(id, blob) {
-    const store = await tx('thumbs', 'readwrite');
-    return promisifyRequest(store.put(blob, id));
+  putThumb(id, blob) {
+    return writeStore('thumbs', store => store.put(blob, id));
   },
-  async deleteThumb(id) {
-    const store = await tx('thumbs', 'readwrite');
-    return promisifyRequest(store.delete(id));
+  deleteThumb(id) {
+    return writeStore('thumbs', store => store.delete(id));
   },
-  async addPlaylist(playlist) {
-    const store = await tx('playlists', 'readwrite');
-    return promisifyRequest(store.add(playlist));
+  addPlaylist(playlist) {
+    return writeStore('playlists', store => store.add(playlist));
   },
   async getAllPlaylists() {
     const store = await tx('playlists', 'readonly');
@@ -149,12 +165,10 @@ const DB = {
     const store = await tx('playlists', 'readonly');
     return promisifyRequest(store.get(id));
   },
-  async updatePlaylist(playlist) {
-    const store = await tx('playlists', 'readwrite');
-    return promisifyRequest(store.put(playlist));
+  updatePlaylist(playlist) {
+    return writeStore('playlists', store => store.put(playlist));
   },
-  async deletePlaylist(id) {
-    const store = await tx('playlists', 'readwrite');
-    return promisifyRequest(store.delete(id));
+  deletePlaylist(id) {
+    return writeStore('playlists', store => store.delete(id));
   },
 };

@@ -3755,14 +3755,20 @@ async function applyServiceWorkerUpdate() {
 
 let autoUpdateNoticeShown = false;
 let autoUpdateCheckInFlight = false;
-let pendingAutoReload = false; // 曲の再生中に新バージョンを検知したとき: 自分で止めたら更新する
+let pendingAutoReload = false; // 新バージョンを検知したとき: 邪魔にならないとき(下の canReloadNow)に画面を読み込み直す
 // 聴いている最中か。audioEl.paused だけだと、曲の切り替わり・電話や通知での一時停止・裏に回ったときの中断も「止まっている」扱いになり、
 // その瞬間に画面を更新して再生が途切れてしまうため、自分で止めたか(wantsToPlay)で判断する
 function isListening() {
   return !!currentTrack && (wantsToPlay || !audioEl.paused);
 }
+// 新しいバージョンへの読み込み直しをしてよいか。曲情報の編集・まとめて編集・歌詞の読み込みなどの途中で読み込み直すと、
+// その変更が保存されずに消えてしまう(アルバム名を変えたのに元に戻った)ため、次の条件をすべて満たすときだけにする:
+//  ・聴いていない ・データベースへの書き込みの途中でない ・曲情報の編集画面を開いていない ・アプリが裏に回っている(使っている最中ではない)
+function canReloadNow() {
+  return !isListening() && !DB.hasPendingWrites() && !editingTrack && document.visibilityState === 'hidden';
+}
 function applyPendingReloadIfIdle() {
-  if (pendingAutoReload && !isListening()) location.reload();
+  if (pendingAutoReload && canReloadNow()) location.reload();
 }
 // アプリを開いた・前面に戻ったときに、裏で静かにバージョンを確認する(ユーザーが設定画面を開く必要がないようにするため)
 async function autoCheckUpdateSilently() {
@@ -3773,13 +3779,9 @@ async function autoCheckUpdateSilently() {
     if (latest !== APP_VERSION) {
       autoUpdateNoticeShown = true;
       await applyServiceWorkerUpdate();
-      if (isListening()) {
-        // 再生中にいきなり画面を切り替えないよう、自分で再生を止めたタイミングで更新する(applyPendingReloadIfIdle)
-        pendingAutoReload = true;
-        showToast(`新しいバージョン(${latest})があります。再生を止めたときに更新します`);
-      } else {
-        location.reload();
-      }
+      // 使っている最中にいきなり読み込み直すと、編集中の内容が消えるため、次にホーム画面へ戻ったとき(裏に回ったとき)に更新する
+      pendingAutoReload = true;
+      showToast(`新しいバージョン(${latest})があります。次にホーム画面に戻ったときに更新します`, 3000);
     }
   } catch (err) { /* オフラインなどはここでは何もしない(設定画面のボタンでエラーを伝える) */ }
   finally { autoUpdateCheckInFlight = false; }
@@ -3799,10 +3801,12 @@ async function checkForUpdate() {
       await applyServiceWorkerUpdate();
       if (isListening()) {
         pendingAutoReload = true;
-        statusEl.textContent = `新しいバージョン(${latest})に更新しました。再生を止めたときに画面が更新されます。`;
+        statusEl.textContent = `新しいバージョン(${latest})に更新しました。再生を止めて、ホーム画面に戻ったときに画面が更新されます。`;
       } else {
         statusEl.textContent = `新しいバージョン(${latest})に更新しました。まもなく画面が更新されます。`;
-        setTimeout(() => location.reload(), 600); // メッセージが一瞬見えるよう、少し待ってから更新する
+        // 自分でボタンを押したときは、その場で更新する(ただし、書き込みの途中なら終わるまで待つ)
+        const reloadWhenSaved = () => { if (DB.hasPendingWrites()) setTimeout(reloadWhenSaved, 300); else location.reload(); };
+        setTimeout(reloadWhenSaved, 600); // メッセージが一瞬見えるよう、少し待ってから更新する
       }
     }
   } catch (err) {
@@ -4162,7 +4166,7 @@ async function openSleepTimerSheet() {
 // アプリが裏に回る/閉じられる直前にも保存する
 document.addEventListener('visibilitychange', () => {
   pbLog(document.visibilityState === 'hidden' ? '裏に回った' : '表に戻った');
-  if (document.visibilityState === 'hidden') { savePlaybackState(true); return; }
+  if (document.visibilityState === 'hidden') { savePlaybackState(true); applyPendingReloadIfIdle(); return; }
   jointPausedUntilVisible = false;
   const deferred = [...normalizeDeferred];
   normalizeDeferred.clear();
