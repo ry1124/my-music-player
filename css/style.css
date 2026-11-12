@@ -295,9 +295,9 @@ html, body {
 }
 .lyrics-expand-btn.active { background: var(--accent); }
 
-/* 拡大表示中: ジャケットを隠し、歌詞の枠を画面の残りいっぱいに広げて、文字も大きくする */
+/* 拡大表示中: ジャケットは歌詞の後ろに薄く残し、歌詞の枠を画面の残りいっぱいに広げて、文字も大きくする */
 body.lyrics-expanded #view-nowplaying .np-artwork-wrap { aspect-ratio: auto; max-height: none; flex: 1 1 auto; }
-body.lyrics-expanded #view-nowplaying .np-artwork { display: none; }
+body.lyrics-expanded #view-nowplaying .np-artwork { position: absolute; inset: 0; box-shadow: none; } /* 隠さず、歌詞の後ろに薄く透けて見えるようにする */
 body.lyrics-expanded #view-nowplaying .np-lyrics { font-size: 23px; line-height: 2.3; padding: 30% 24px; }
 
 @media (min-width: 700px) {
