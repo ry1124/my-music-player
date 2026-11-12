@@ -4089,6 +4089,9 @@ function openNowPlaying() {
 function updateNowPlayingUI() {
   if (!currentTrack) return;
   document.getElementById('np-artwork').src = getArtworkUrl(currentTrack);
+  // 歌詞欄の背景にもジャケ写を敷き、半透明の色を重ねて薄く見せる(下のジャケ写の画像は、歌詞に隠れているとiPhoneで描かれないことがあるため)
+  document.getElementById('np-lyrics').style.backgroundImage =
+    `linear-gradient(var(--lyric-bg), var(--lyric-bg)), url("${getArtworkUrl(currentTrack)}")`;
   document.getElementById('np-title').textContent = currentTrack.title;
   document.getElementById('np-artist').textContent = currentTrack.artist;
   updateFavButton();
