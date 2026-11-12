@@ -154,6 +154,7 @@ function showView(id) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(id).classList.add('active');
   document.body.classList.toggle('np-open', id === 'view-nowplaying'); // 再生画面ではミニプレイヤー/タブバーを隠す
+  if (id === 'view-nowplaying' && prev && prev.id !== id) repaintArtwork(); // 隠れている間に曲が変わっていても、ジャケ写を確実に出す
   if (id === 'view-playlists' && playlistListDirty) renderPlaylistList();
   refreshIndexTarget();
   document.getElementById(id).querySelectorAll('ul').forEach(ul => { if (ul._v) updateVirtualWindow(ul, false); });
@@ -4360,10 +4361,21 @@ function toggleLyrics() {
   document.getElementById('btn-lyrics-expand').classList.toggle('hidden', hidden);
   if (hidden) {
     setLyricsExpanded(false);
+    repaintArtwork();
   } else {
     lastActiveLyricIdx = -1;
     updateLyricsPane();
   }
+}
+
+// 歌詞やほかの画面の下に隠れたまま曲が切り替わると、iPhoneのSafariがジャケ写を描かず、歌詞を消しても空白のままになる。
+// 見えるようになったときに画像を読み込み直して、確実に描かせる
+function repaintArtwork() {
+  if (!currentTrack) return;
+  const img = document.getElementById('np-artwork');
+  img.removeAttribute('src');
+  void img.offsetWidth;
+  img.src = getArtworkUrl(currentTrack);
 }
 
 // 歌詞の拡大表示(Spotifyのフルスクリーン歌詞のように、歌詞だけを画面いっぱいに大きく出す)
