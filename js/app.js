@@ -2391,7 +2391,7 @@ async function estimateSilenceOffset(track) {
   const cur = track.lyricOffset || 0;
   const newOffset = Math.round((firstLine.time - silence) * 10) / 10;
   if (Math.abs(newOffset - cur) < 0.15) { dialogAlert(`曲の頭の無音: 約${silence.toFixed(1)}秒。今の「ずれ」(${cur.toFixed(1)}秒)から、ほとんど変わらないので、調整しませんでした。`); return; }
-  if (!dialogConfirm(`曲の頭の無音: 約${silence.toFixed(1)}秒 / 歌詞の1行目: ${firstLine.time.toFixed(1)}秒\n\n「ずれ」を ${cur.toFixed(1)}秒 → ${newOffset.toFixed(1)}秒 に変更します。よろしいですか?\n(あくまで目安です。合わない場合は、あとで「タップで合わせる」で直せます)`)) return;
+  if (!dialogConfirm(`曲の頭の無音: 約${silence.toFixed(1)}秒 / 歌詞の1行目: ${firstLine.time.toFixed(1)}秒\n\n「ずれ」を ${cur.toFixed(1)}秒 → ${newOffset.toFixed(1)}秒 に変更します。よろしいですか?\n(あくまで目安です)`)) return;
   track.lyricOffset = newOffset;
   await DB.updateTrack(track);
   if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
@@ -2442,7 +2442,7 @@ async function estimateLyricTiming(track) {
   track.lyricOffset = 0;
   await DB.updateTrack(track);
   if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
-  dialogAlert('歌詞のタイミングを推定しました(あくまで目安です。ずれる場合は「タップで合わせる」で調整してください)。');
+  dialogAlert('歌詞のタイミングを推定しました(あくまで目安です)。');
 }
 
 // この1曲だけ、曲の長さに合う歌詞をネットで検索し直す(ずれている曲の直し用)
@@ -4359,7 +4359,6 @@ function toggleLyrics() {
   const hidden = pane.classList.contains('hidden');
   document.getElementById('btn-lyrics-expand').classList.toggle('hidden', hidden);
   if (hidden) {
-    document.getElementById('lyric-offset').classList.add('hidden'); // 歌詞を隠すときは調整ボタンも隠す
     setLyricsExpanded(false);
   } else {
     lastActiveLyricIdx = -1;
@@ -4378,8 +4377,6 @@ function toggleLyricsExpanded() {
 
 function updateLyricsPane() {
   const pane = document.getElementById('np-lyrics');
-  const offsetBar = document.getElementById('lyric-offset');
-  offsetBar.classList.add('hidden'); // 時刻付きの歌詞を表示しているときだけ出す
   if (pane.classList.contains('hidden')) return;
   pane.innerHTML = '';
   pane.onclick = null;
@@ -4390,20 +4387,10 @@ function updateLyricsPane() {
       div.className = 'lyric-line';
       div.textContent = line.text || '♪';
       div.addEventListener('click', () => {
-        if (lyricSyncMode) {
-          // 「今、この行を歌っている」→ 今の再生位置に、この行の時刻が来るように補正する
-          setLyricOffset(line.time - audioEl.currentTime);
-          lyricSyncMode = false;
-          const bar = document.getElementById('lyric-offset');
-          if (bar._syncDone) bar._syncDone();
-          return;
-        }
         audioEl.currentTime = Math.max(0, line.time - (currentTrack.lyricOffset || 0));
       });
       pane.appendChild(div);
     });
-    offsetBar.replaceChildren(...buildLyricOffsetControls());
-    offsetBar.classList.remove('hidden');
     lastActiveLyricIdx = -1;
     highlightCurrentLyricLine();
   } else if (currentTrack.lyrics) {
@@ -4424,64 +4411,13 @@ function updateLyricsPane() {
   }
 }
 
-// 歌詞のタイミング手動調整(歌詞欄の下に固定)。プラス = 歌詞が早く出る / マイナス = 遅く出る。曲ごとに保存する
-let lyricOffsetSaveTimer = null;
-let lyricSyncMode = false; // true の間は、次にタップした歌詞の行を「今歌っている行」として、自動で合わせる
-
-function setLyricOffset(value) {
-  currentTrack.lyricOffset = Math.round(value * 10) / 10;
-  lastActiveLyricIdx = -1;
-  highlightCurrentLyricLine();
-  clearTimeout(lyricOffsetSaveTimer);
-  const target = currentTrack;
-  lyricOffsetSaveTimer = setTimeout(() => DB.updateTrack(target), 700); // 連続で押している間は保存しない
-}
-
-function buildLyricOffsetControls() {
-  lyricSyncMode = false;
-  const label = document.createElement('button');
-  label.className = 'lyric-offset-label';
-  const show = () => {
-    const o = currentTrack.lyricOffset || 0;
-    label.textContent = `ずれ ${o > 0 ? '+' : ''}${o.toFixed(1)}秒`;
-  };
-  const change = (delta) => { setLyricOffset((currentTrack.lyricOffset || 0) + delta); show(); };
-  const mk = (text, delta) => {
-    const b = document.createElement('button');
-    b.className = 'lyric-offset-btn';
-    b.textContent = text;
-    b.addEventListener('click', (e) => { e.stopPropagation(); change(delta); });
-    return b;
-  };
-  label.addEventListener('click', (e) => { e.stopPropagation(); setLyricOffset(0); show(); }); // 押すと0に戻す
-
-  const sync = document.createElement('button');
-  sync.className = 'lyric-offset-btn lyric-sync-btn';
-  const syncIdle = 'タップで合わせる';
-  sync.textContent = syncIdle;
-  sync.addEventListener('click', (e) => {
-    e.stopPropagation();
-    lyricSyncMode = !lyricSyncMode;
-    sync.textContent = lyricSyncMode ? '今歌っている行をタップ' : syncIdle;
-    sync.classList.toggle('waiting', lyricSyncMode);
-  });
-  // 歌詞の行がタップされたとき(updateLyricsPane から呼ばれる)に、合わせ終わった表示へ戻すためのフック
-  sync._done = () => { sync.textContent = syncIdle; sync.classList.remove('waiting'); show(); };
-  document.getElementById('lyric-offset')._syncDone = sync._done;
-
-  show();
-  const br = document.createElement('div');
-  br.className = 'lyric-offset-break';
-  return [mk('−1', -1), mk('−0.1', -0.1), label, mk('+0.1', 0.1), mk('+1', 1), br, sync];
-}
-
 // 再生位置に合わせて現在の行をハイライト+自動スクロール(timeupdateから呼ばれる)
 function highlightCurrentLyricLine() {
   const pane = document.getElementById('np-lyrics');
   if (pane.classList.contains('hidden')) return;
   if (!currentTrack || !currentTrack.syncedLyrics || currentTrack.syncedLyrics.length === 0) return;
 
-  const t = audioEl.currentTime + (currentTrack.lyricOffset || 0); // 手動調整(プラスで歌詞が早く出る)
+  const t = audioEl.currentTime + (currentTrack.lyricOffset || 0); // ずれの補正(プラスで歌詞が早く出る)
   const lines = currentTrack.syncedLyrics;
   let lo = 0, hi = lines.length - 1, activeIdx = -1; // 二分探索: 時刻が t 以下の最後の行
   while (lo <= hi) {
