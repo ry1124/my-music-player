@@ -4392,6 +4392,7 @@ function toggleLyricsExpanded() {
 
 function updateLyricsPane() {
   const pane = document.getElementById('np-lyrics');
+  pane.scrollTop = 0; // 前の曲のスクロール位置が残ると、次の曲の歌詞が途中(下の方)から始まってしまうため、先頭に戻す
   if (pane.classList.contains('hidden')) return;
   pane.innerHTML = '';
   pane.onclick = null;
