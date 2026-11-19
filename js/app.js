@@ -711,6 +711,11 @@ function importLyricsForTrack(track) {
     if (!file) return;
     const text = await file.text();
     applyLyricsText(track, text);
+    if (track.syncedLyrics) {
+      // 一括読み込みと同じく、以前の「ずれ」は捨てる(ずれを直すボタンは無くしたので、残すと戻せなくなる)
+      track.lyricOffset = 0;
+      track.lyricsDurationMatched = true;
+    }
     await DB.updateTrack(track);
     dialogAlert(`「${track.title}」に歌詞を読み込みました${track.syncedLyrics ? '(曲に合わせて動きます)' : ''}`);
     if (currentTrack && currentTrack.id === track.id) { lastActiveLyricIdx = -1; updateLyricsPane(); }
@@ -3164,6 +3169,7 @@ function setSource(el, track) {
   const url = URL.createObjectURL(sourceBlobFor(track));
   audioUrls.set(el, url);
   el.src = url;
+  el.defaultPlaybackRate = playbackSpeed; // load() のたびに速度がこの値へ戻されるので、こちらにも入れておく(入れないと次の曲が1倍速になる)
   el.playbackRate = playbackSpeed;
   if (preloaded.el === el) preloaded = { el: null, trackId: null };
 }
@@ -4059,8 +4065,7 @@ function cycleRepeat() {
 const SPEED_STEPS = [0.75, 1, 1.25, 1.5, 1.75, 2];
 let playbackSpeed = Settings.get('playbackSpeed') || 1;
 function applyPlaybackSpeed() {
-  audioA.playbackRate = playbackSpeed;
-  audioB.playbackRate = playbackSpeed;
+  [audioA, audioB].forEach((el) => { el.defaultPlaybackRate = playbackSpeed; el.playbackRate = playbackSpeed; });
   document.getElementById('btn-speed').textContent = `${playbackSpeed}x`;
   document.getElementById('btn-speed').classList.toggle('active', playbackSpeed !== 1);
 }
